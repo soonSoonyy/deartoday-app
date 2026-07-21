@@ -20,6 +20,11 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+// 검수용 2차 LLM 호출(자연스러움/한국어 교정)을 건너뛰어 응답 속도를 절반 이하로 줄이는 모드.
+// Render 환경변수에 FAST_MODE=true 를 추가하면 켜짐. 문자 오염을 걸러내는
+// 결정적 필터(stripNonKorean 등)는 그대로 유지되고, LLM 재검수만 생략됨.
+const FAST_MODE = /^(1|true|yes)$/i.test(process.env.FAST_MODE || '');
+
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(DATA_FILE)) {
   fs.writeFileSync(DATA_FILE, JSON.stringify({ babyName: '', entries: {} }, null, 2));
@@ -90,6 +95,22 @@ function naturalCheckSystemPrompt() {
 - "답장:", "최종답장:", "결과:" 같은 라벨이나 접두사를 앞에 붙이지 말고, 답장 텍스트로 바로 시작해`;
 }
 
+// 모델 혼잡("high demand", 503 등)은 보통 몇 초 안에 풀리는 일시 현상이라,
+// 바로 실패로 돌려주지 않고 짧게 기다렸다가 두 번 더 시도함.
+// (429는 분당 한도 초과일 수도 있어 함께 재시도 대상에 포함)
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503]);
+const RETRY_DELAYS_MS = [2000, 5000];
+
+async function fetchWithRetry(doFetch) {
+  let response = await doFetch();
+  for (const delay of RETRY_DELAYS_MS) {
+    if (!RETRYABLE_STATUS.has(response.status)) break;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    response = await doFetch();
+  }
+  return response;
+}
+
 function toGroqMessages(systemPrompt, messages) {
   return [
     { role: 'system', content: systemPrompt },
@@ -101,7 +122,7 @@ async function callGroq(systemPrompt, messages, temperature) {
   if (!GROQ_API_KEY) {
     throw new Error('서버에 GROQ_API_KEY가 설정되어 있지 않아요.');
   }
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const response = await fetchWithRetry(() => fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -113,7 +134,7 @@ async function callGroq(systemPrompt, messages, temperature) {
       ...(temperature !== undefined ? { temperature } : {}),
       messages: toGroqMessages(systemPrompt, messages)
     })
-  });
+  }));
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Groq API 오류 (${response.status}): ${errText}`);
@@ -131,36 +152,68 @@ function toGeminiContents(messages) {
   }));
 }
 
+// Gemini 2.5부터는 답을 내기 전에 내부 추론('생각')을 먼저 하는 게 기본이라
+// 짧은 답장에도 수십 초씩 걸릴 수 있음. 이 앱은 카톡처럼 빠른 반응이 중요해서
+// 생각 기능을 최소로 낮춤. 다만 설정 필드가 모델 세대마다 달라서
+// (3.x: thinkingLevel, 2.5: thinkingBudget) 순서대로 시도하고,
+// 모델이 거부(400)하면 다음 후보로 넘어간 뒤 성공한 설정을 기억해둠.
+const GEMINI_THINKING_CONFIGS = [
+  { thinkingConfig: { thinkingLevel: 'low' } },
+  { thinkingConfig: { thinkingBudget: 0 } },
+  {}
+];
+let geminiThinkingIndex = 0;
+
 async function callGemini(systemPrompt, messages, temperature) {
   if (!GEMINI_API_KEY) {
     throw new Error('서버에 GEMINI_API_KEY가 설정되어 있지 않아요.');
   }
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: toGeminiContents(messages),
-        ...(temperature !== undefined ? { generationConfig: { temperature } } : {})
-      })
+  while (true) {
+    const generationConfig = {
+      ...(temperature !== undefined ? { temperature } : {}),
+      ...GEMINI_THINKING_CONFIGS[geminiThinkingIndex]
+    };
+    const response = await fetchWithRetry(() => fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: systemPrompt }] },
+          contents: toGeminiContents(messages),
+          ...(Object.keys(generationConfig).length ? { generationConfig } : {})
+        })
+      }
+    ));
+    if (response.status === 400 && geminiThinkingIndex < GEMINI_THINKING_CONFIGS.length - 1) {
+      geminiThinkingIndex++;
+      continue;
     }
-  );
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Gemini API 오류 (${response.status}): ${errText}`);
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini API 오류 (${response.status}): ${errText}`);
+    }
+    const data = await response.json();
+    return (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
   }
-  const data = await response.json();
-  return (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
 }
 
 // LLM_PROVIDER 설정값에 따라 Groq/Gemini 중 실제로 호출할 제공자를 고름.
 // 나머지 코드는 어떤 제공자를 쓰는지 몰라도 되게 이 함수 하나만 거쳐서 호출함.
+// 주 제공자가 재시도까지 하고도 실패했을 때(혼잡, 한도 소진 등), 다른 제공자의
+// 키가 설정되어 있으면 그쪽으로 한 번 더 시도해서 앱이 아예 멈추는 걸 막음.
 async function callModel(systemPrompt, messages, temperature) {
-  return LLM_PROVIDER === 'gemini'
-    ? callGemini(systemPrompt, messages, temperature)
-    : callGroq(systemPrompt, messages, temperature);
+  const useGemini = LLM_PROVIDER === 'gemini';
+  const primary = useGemini ? callGemini : callGroq;
+  const fallback = useGemini ? callGroq : callGemini;
+  const fallbackKey = useGemini ? GROQ_API_KEY : GEMINI_API_KEY;
+  try {
+    return await primary(systemPrompt, messages, temperature);
+  } catch (e) {
+    if (!fallbackKey) throw e;
+    console.warn(`주 제공자(${LLM_PROVIDER}) 호출 실패, 예비 제공자로 재시도함: ${e.message}`);
+    return fallback(systemPrompt, messages, temperature);
+  }
 }
 
 // 모델이 확률적으로 답장/일기 초안 자체에 한자·일본어·러시아어 등 엉뚱한 문자나,
@@ -239,6 +292,7 @@ function stripNonKorean(text) {
 // 대화 맥락 없이 답장 문장만 따로 떼어 검토하면 흐름과 동떨어진 결과로 고쳐버릴 수 있어서, 대화 기록도 함께 넘겨줌.
 async function naturalizeReply(draft, messages, babyName) {
   if (!draft) return draft;
+  if (FAST_MODE) return stripStrayLatinWords(stripNonKorean(draft), babyName);
   const transcript = (messages || [])
     .map(m => `${m.role === 'user' ? '부모' : '친구'}: ${m.content || ''}`)
     .join('\n');
@@ -254,6 +308,7 @@ async function naturalizeReply(draft, messages, babyName) {
 // 일기 초안도 한 번 더 검토해서, 다른 언어/문자가 섞여 나오지 않았는지 확인·교정한 뒤 보냄.
 async function ensureKoreanDiary(draft, babyName) {
   if (!draft) return draft;
+  if (FAST_MODE) return stripStrayLatinWords(stripNonKorean(draft), babyName);
   const checked = await callModelKorean(diaryLanguageCheckSystemPrompt(), [{ role: 'user', content: draft }], { temperature: 0.3, babyName });
   return stripStrayLatinWords(stripNonKorean(stripLabelPrefix(checked) || draft), babyName);
 }
@@ -312,6 +367,17 @@ app.post('/api/diary', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+// ---- 프론트엔드 정적 파일 서빙 (배포용) ----
+// frontend/dist 가 빌드되어 있으면 백엔드 서버 하나로 화면 + API를 함께 제공함.
+// 로컬 개발 때는 dist가 없으니 이 블록은 건너뛰고, Vite 개발 서버(5173)를 그대로 쓰면 됨.
+const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist');
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`✅ 백엔드 서버 실행 중: http://localhost:${PORT}`);
