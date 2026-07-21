@@ -95,6 +95,22 @@ function naturalCheckSystemPrompt() {
 - "답장:", "최종답장:", "결과:" 같은 라벨이나 접두사를 앞에 붙이지 말고, 답장 텍스트로 바로 시작해`;
 }
 
+// 모델 혼잡("high demand", 503 등)은 보통 몇 초 안에 풀리는 일시 현상이라,
+// 바로 실패로 돌려주지 않고 짧게 기다렸다가 두 번 더 시도함.
+// (429는 분당 한도 초과일 수도 있어 함께 재시도 대상에 포함)
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503]);
+const RETRY_DELAYS_MS = [2000, 5000];
+
+async function fetchWithRetry(doFetch) {
+  let response = await doFetch();
+  for (const delay of RETRY_DELAYS_MS) {
+    if (!RETRYABLE_STATUS.has(response.status)) break;
+    await new Promise(resolve => setTimeout(resolve, delay));
+    response = await doFetch();
+  }
+  return response;
+}
+
 function toGroqMessages(systemPrompt, messages) {
   return [
     { role: 'system', content: systemPrompt },
@@ -106,7 +122,7 @@ async function callGroq(systemPrompt, messages, temperature) {
   if (!GROQ_API_KEY) {
     throw new Error('서버에 GROQ_API_KEY가 설정되어 있지 않아요.');
   }
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+  const response = await fetchWithRetry(() => fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -118,7 +134,7 @@ async function callGroq(systemPrompt, messages, temperature) {
       ...(temperature !== undefined ? { temperature } : {}),
       messages: toGroqMessages(systemPrompt, messages)
     })
-  });
+  }));
   if (!response.ok) {
     const errText = await response.text();
     throw new Error(`Groq API 오류 (${response.status}): ${errText}`);
@@ -157,7 +173,7 @@ async function callGemini(systemPrompt, messages, temperature) {
       ...(temperature !== undefined ? { temperature } : {}),
       ...GEMINI_THINKING_CONFIGS[geminiThinkingIndex]
     };
-    const response = await fetch(
+    const response = await fetchWithRetry(() => fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
@@ -168,7 +184,7 @@ async function callGemini(systemPrompt, messages, temperature) {
           ...(Object.keys(generationConfig).length ? { generationConfig } : {})
         })
       }
-    );
+    ));
     if (response.status === 400 && geminiThinkingIndex < GEMINI_THINKING_CONFIGS.length - 1) {
       geminiThinkingIndex++;
       continue;
@@ -184,10 +200,20 @@ async function callGemini(systemPrompt, messages, temperature) {
 
 // LLM_PROVIDER 설정값에 따라 Groq/Gemini 중 실제로 호출할 제공자를 고름.
 // 나머지 코드는 어떤 제공자를 쓰는지 몰라도 되게 이 함수 하나만 거쳐서 호출함.
+// 주 제공자가 재시도까지 하고도 실패했을 때(혼잡, 한도 소진 등), 다른 제공자의
+// 키가 설정되어 있으면 그쪽으로 한 번 더 시도해서 앱이 아예 멈추는 걸 막음.
 async function callModel(systemPrompt, messages, temperature) {
-  return LLM_PROVIDER === 'gemini'
-    ? callGemini(systemPrompt, messages, temperature)
-    : callGroq(systemPrompt, messages, temperature);
+  const useGemini = LLM_PROVIDER === 'gemini';
+  const primary = useGemini ? callGemini : callGroq;
+  const fallback = useGemini ? callGroq : callGemini;
+  const fallbackKey = useGemini ? GROQ_API_KEY : GEMINI_API_KEY;
+  try {
+    return await primary(systemPrompt, messages, temperature);
+  } catch (e) {
+    if (!fallbackKey) throw e;
+    console.warn(`주 제공자(${LLM_PROVIDER}) 호출 실패, 예비 제공자로 재시도함: ${e.message}`);
+    return fallback(systemPrompt, messages, temperature);
+  }
 }
 
 // 모델이 확률적으로 답장/일기 초안 자체에 한자·일본어·러시아어 등 엉뚱한 문자나,
