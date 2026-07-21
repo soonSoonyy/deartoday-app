@@ -313,6 +313,17 @@ app.post('/api/diary', async (req, res) => {
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
+// ---- 프론트엔드 정적 파일 서빙 (배포용) ----
+// frontend/dist 가 빌드되어 있으면 백엔드 서버 하나로 화면 + API를 함께 제공함.
+// 로컬 개발 때는 dist가 없으니 이 블록은 건너뛰고, Vite 개발 서버(5173)를 그대로 쓰면 됨.
+const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist');
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+  app.get(/^\/(?!api\/).*/, (req, res) => {
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+}
+
 app.listen(PORT, () => {
   console.log(`✅ 백엔드 서버 실행 중: http://localhost:${PORT}`);
 });
