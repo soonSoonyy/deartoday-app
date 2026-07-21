@@ -134,6 +134,9 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
 .pd-privacy-testing-label { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: rgba(43,58,85,0.35); margin: 0 0 8px; }
 
 @media (max-width: 460px) {
-  .pd-phone { height: 100vh; max-height: 100vh; border-radius: 0; }
-  .pd-root { padding: 0; }
+  /* 키보드가 올라오면 화면에서 실제 보이는 높이가 줄어드는데, 100vh는 그걸 반영하지
+     못해 입력창이 키보드 뒤로 밀려남. JS(visualViewport)가 넣어주는 --pd-vvh 값을
+     우선 쓰고, 없으면 dvh(동적 뷰포트), 그것도 없으면 100vh 순서로 폴백. */
+  .pd-phone { height: 100vh; height: 100dvh; height: var(--pd-vvh, 100dvh); max-height: none; border-radius: 0; }
+  .pd-root { padding: 0; min-height: 0; height: 100vh; height: 100dvh; height: var(--pd-vvh, 100dvh); }
 }

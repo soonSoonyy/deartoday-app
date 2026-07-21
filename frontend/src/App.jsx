@@ -141,6 +141,23 @@ export default function App() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [data, view, sending]);
 
+  // 모바일에서 키보드가 올라오면 보이는 영역(visualViewport)이 줄어드는데,
+  // vh 기준 레이아웃은 그대로라 입력창이 키보드에 가려지고 화면이 위로 밀림.
+  // 실제 보이는 높이를 CSS 변수(--pd-vvh)로 전달해 앱 높이를 그만큼으로 줄이고,
+  // 브라우저가 페이지를 밀어올린 스크롤을 되돌린 뒤 대화는 맨 아래로 맞춰줌.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const syncHeight = () => {
+      document.documentElement.style.setProperty('--pd-vvh', `${Math.round(vv.height)}px`);
+      window.scrollTo(0, 0);
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    };
+    vv.addEventListener('resize', syncHeight);
+    syncHeight();
+    return () => vv.removeEventListener('resize', syncHeight);
+  }, []);
+
   const todayEntry = data.entries[todayKey] || { messages: [], diaryText: '' };
 
   const ensureGreeting = useCallback(() => {
