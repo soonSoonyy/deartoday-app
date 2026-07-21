@@ -11,9 +11,12 @@ services:
     startCommand: cd backend && node server.js
     healthCheckPath: /api/health
     envVars:
-      # AI 답장/일기 생성에 쓰는 키. 보안을 위해 여기에 값을 적지 않고,
-      # Render 대시보드에서 직접 입력하도록 sync: false 로 둠.
+      # AI 답장/일기 생성에 쓰는 키와 제공자 선택('groq' | 'gemini').
+      # 보안상 값은 여기에 적지 않고 Render 대시보드에서 직접 입력·수정함 (sync: false).
+      # 쓰는 제공자의 키만 채우면 됨.
+      - key: LLM_PROVIDER
+        sync: false
       - key: GROQ_API_KEY
         sync: false
-      - key: LLM_PROVIDER
-        value: groq
+      - key: GEMINI_API_KEY
+        sync: false
