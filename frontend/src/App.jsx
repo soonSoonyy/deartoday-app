@@ -29,6 +29,12 @@ function hasBatchim(str) {
 function withTopicParticle(name) {
   return hasBatchim(name) ? `${name}이는` : `${name}는`;
 }
+// 한글 입력기(IME)로 글자를 조합하는 도중 Enter를 누르면 브라우저가 keydown을
+// 두 번(조합 확정 + 실제 Enter) 발생시켜 전송이 중복 실행됨. 조합 중인 Enter는 무시함.
+function isImeComposing(e) {
+  return e.nativeEvent?.isComposing || e.keyCode === 229;
+}
+
 function buildMonthGrid(year, month) {
   const firstDay = new Date(year, month, 1);
   const startWeekday = firstDay.getDay();
@@ -190,12 +196,14 @@ export default function App() {
     const text = input.trim();
     if (!text) return;
     setError('');
+    // 서버 저장을 기다리기 전에 입력창부터 비움 — 저장이 느릴 때 글이 남아 있으면
+    // 사용자가 전송을 한 번 더 눌러 같은 메시지가 두 번 들어가는 원인이 됨.
+    setInput('');
     const userMsg = { role: 'user', content: text };
     const updatedMessages = [...(todayEntry.messages || []), userMsg];
     const next = { ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: updatedMessages } } };
-    await persist(next);
-    setInput('');
     setTimeout(() => { if (textareaRef.current) textareaRef.current.focus(); }, 0);
+    await persist(next);
   };
 
   // Triggered by the "답장 받기" button — sends everything since the last reply in one go.
@@ -277,7 +285,7 @@ export default function App() {
               value={nameInput}
               onChange={e => setNameInput(e.target.value)}
               placeholder="예: 하늘이"
-              onKeyDown={e => { if (e.key === 'Enter') handleNameSubmit(); }}
+              onKeyDown={e => { if (e.key === 'Enter' && !isImeComposing(e)) handleNameSubmit(); }}
             />
             <button className="pd-btn-primary" onClick={handleNameSubmit}>시작하기</button>
           </div>
@@ -319,7 +327,7 @@ export default function App() {
                   value={nameInput}
                   onChange={e => setNameInput(e.target.value)}
                   onBlur={handleRenameSubmit}
-                  onKeyDown={e => { if (e.key === 'Enter') handleRenameSubmit(); }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !isImeComposing(e)) handleRenameSubmit(); }}
                 />
               )}
             </div>
@@ -407,7 +415,7 @@ export default function App() {
               value={input}
               placeholder="오늘 있었던 일을 편하게 얘기해줘..."
               onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isImeComposing(e)) { e.preventDefault(); sendMessage(); } }}
               rows={1}
             />
             <button className="pd-send-btn" onClick={sendMessage} disabled={sending || !input.trim()}>
@@ -528,7 +536,7 @@ function GreetingPicker({ babyName, onPick }) {
           value={custom}
           onChange={e => setCustom(e.target.value)}
           placeholder="원하는 첫 질문을 직접 써도 돼"
-          onKeyDown={e => { if (e.key === 'Enter') submitCustom(); }}
+          onKeyDown={e => { if (e.key === 'Enter' && !isImeComposing(e)) submitCustom(); }}
         />
         <button className="pd-greeting-custom-btn" onClick={submitCustom} disabled={!custom.trim()}>시작</button>
       </div>
