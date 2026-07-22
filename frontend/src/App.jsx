@@ -468,9 +468,9 @@ export default function App() {
               <h2 className="pd-privacy-title">개인정보 안내</h2>
               <ul className="pd-privacy-text">
                 <li>AI API 키는 백엔드 서버에만 저장돼. 브라우저(프론트엔드)로는 절대 전달되지 않아.</li>
-                <li>대화·일기는 백엔드 서버의 로컬 파일(backend/data/diary-data.json)에 저장돼.</li>
+                <li>대화·일기는 백엔드 서버가 관리하는 저장소(DB 또는 로컬 파일)에 저장돼.</li>
                 <li>일기를 쓰기 위해 대화 내용이 서버를 거쳐 AI 모델로 전송돼. 민감한 정보는 되도록 적게 남기는 걸 추천해.</li>
-                <li>실제 서비스로 배포할 땐 이 JSON 파일 저장 방식을 암호화된 DB로 바꾸고, HTTPS·로그인 등 접근 제어를 추가하는 걸 추천해.</li>
+                <li>실제 서비스로 배포할 땐 저장 데이터 암호화, HTTPS·로그인 등 접근 제어를 추가하는 걸 추천해.</li>
               </ul>
               {!confirmDelete ? (
                 <button className="pd-btn-danger" onClick={() => setConfirmDelete(true)}>

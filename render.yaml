@@ -24,3 +24,8 @@ services:
       # 안 넣으면 gemini-flash-lite-latest 가 기본으로 쓰임. 주 모델은 GEMINI_MODEL.
       - key: GEMINI_FALLBACK_MODEL
         sync: false
+      # 일기 데이터를 영구 보존할 DB 연결 문자열(Supabase 등의 PostgreSQL).
+      # 넣으면 DB에 저장(재배포해도 유지), 비워두면 로컬 파일에 저장(재배포 시 초기화).
+      # Supabase → Project Settings → Database → Connection string(URI)에서 복사.
+      - key: DATABASE_URL
+        sync: false

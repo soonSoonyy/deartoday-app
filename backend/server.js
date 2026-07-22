@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import pg from 'pg';
 
 dotenv.config();
 
@@ -11,6 +12,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'diary-data.json');
 const PORT = process.env.PORT || 4000;
+
+// 저장소 선택: DATABASE_URL(예: Supabase 연결 문자열)이 있으면 Postgres에 저장하고,
+// 없으면 예전처럼 로컬 JSON 파일에 저장함. 덕분에 배포 환경은 DB로 영구 보존되고,
+// 로컬 개발은 DB 없이도 파일만으로 그대로 돌아감.
+const DATABASE_URL = process.env.DATABASE_URL;
+const USE_DB = !!DATABASE_URL;
 
 // 어떤 LLM 제공자를 쓸지는 코드가 아니라 .env의 LLM_PROVIDER 값으로 결정함 ('groq' | 'gemini').
 // 두 제공자 구현을 모두 코드에 남겨두고, 여기서 하나만 골라 쓰는 스위치 역할만 함.
@@ -30,9 +37,66 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // 문자 오염을 걸러내는 결정적 필터(stripNonKorean 등)는 모드와 무관하게 항상 동작함.
 const FAST_MODE = !/^(0|false|no)$/i.test(process.env.FAST_MODE || '');
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify({ babyName: '', entries: {} }, null, 2));
+const EMPTY_DATA = { babyName: '', entries: {} };
+
+// ---- 저장소 계층: DB 모드(Postgres/Supabase) 또는 파일 모드 ----
+// 데이터 형태는 두 모드 모두 { babyName, entries } JSON 블롭 하나로 동일함.
+// DB 모드에서는 이 블롭을 deartoday_state 테이블의 단일 행에 통째로 저장함.
+// (앱이 전체 데이터를 한 번에 읽고 한 번에 쓰는 구조라, 행 하나에 JSONB로 담는 게 가장 단순하고 안전함)
+
+let pool = null;
+
+async function initStorage() {
+  if (USE_DB) {
+    // Supabase 같은 관리형 DB는 SSL 연결을 요구함(관리형 인증서라 체인 검증 없이 암호화만 사용).
+    // 로컬/사설 Postgres는 보통 SSL이 없어 연결이 실패하므로, localhost 연결에서만 SSL을 끔.
+    const isLocal = /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(DATABASE_URL);
+    pool = new pg.Pool({
+      connectionString: DATABASE_URL,
+      ssl: isLocal ? false : { rejectUnauthorized: false }
+    });
+    // 서버가 켜질 때 테이블과 초기 행을 자동으로 만들어, 사용자가 SQL을 따로 실행할 필요 없음.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS deartoday_state (
+        id SMALLINT PRIMARY KEY DEFAULT 1,
+        baby_name TEXT NOT NULL DEFAULT '',
+        entries JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        CONSTRAINT deartoday_single_row CHECK (id = 1)
+      );
+    `);
+    await pool.query(`INSERT INTO deartoday_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;`);
+    console.log('✅ 저장소: Postgres(DB) 연결됨 — 데이터가 영구 보존돼요.');
+  } else {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(DATA_FILE)) {
+      fs.writeFileSync(DATA_FILE, JSON.stringify(EMPTY_DATA, null, 2));
+    }
+    console.log('ℹ️  저장소: 로컬 파일(diary-data.json) — DATABASE_URL이 없어 파일에 저장해요.');
+  }
+}
+
+async function loadData() {
+  if (USE_DB) {
+    const { rows } = await pool.query('SELECT baby_name, entries FROM deartoday_state WHERE id = 1;');
+    if (rows.length === 0) return { ...EMPTY_DATA };
+    return { babyName: rows[0].baby_name || '', entries: rows[0].entries || {} };
+  }
+  const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+  return JSON.parse(raw);
+}
+
+async function saveDataStore(babyName, entries) {
+  const name = babyName || '';
+  const items = entries || {};
+  if (USE_DB) {
+    await pool.query(
+      `UPDATE deartoday_state SET baby_name = $1, entries = $2, updated_at = now() WHERE id = 1;`,
+      [name, JSON.stringify(items)]
+    );
+    return;
+  }
+  fs.writeFileSync(DATA_FILE, JSON.stringify({ babyName: name, entries: items }, null, 2));
 }
 
 if (LLM_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
@@ -343,24 +407,22 @@ async function ensureKoreanDiary(draft, babyName) {
 }
 
 // ---- 데이터 저장/조회 (다이어리 텍스트, 대화 전부 포함된 하나의 JSON 블롭) ----
-app.get('/api/data', (req, res) => {
+app.get('/api/data', async (req, res) => {
   try {
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    res.json(JSON.parse(raw));
+    res.json(await loadData());
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: '데이터를 불러오지 못했어요.' });
   }
 });
 
-app.post('/api/data', (req, res) => {
+app.post('/api/data', async (req, res) => {
   try {
     const { babyName, entries } = req.body || {};
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify({ babyName: babyName || '', entries: entries || {} }, null, 2)
-    );
+    await saveDataStore(babyName, entries);
     res.json({ ok: true });
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: '데이터를 저장하지 못했어요.' });
   }
 });
@@ -408,6 +470,13 @@ if (fs.existsSync(FRONTEND_DIST)) {
   });
 }
 
-app.listen(PORT, () => {
-  console.log(`✅ 백엔드 서버 실행 중: http://localhost:${PORT}`);
-});
+initStorage()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`✅ 백엔드 서버 실행 중: http://localhost:${PORT}`);
+    });
+  })
+  .catch((e) => {
+    console.error('❌ 저장소 초기화 실패로 서버를 시작하지 못했어요:', e.message);
+    process.exit(1);
+  });
