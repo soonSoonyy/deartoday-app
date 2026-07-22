@@ -20,3 +20,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      # (선택) Gemini 주 모델이 무료 한도(429)에 걸리면 자동으로 넘어갈 예비 모델.
+      # 안 넣으면 gemini-flash-lite-latest 가 기본으로 쓰임. 주 모델은 GEMINI_MODEL.
+      - key: GEMINI_FALLBACK_MODEL
+        sync: false

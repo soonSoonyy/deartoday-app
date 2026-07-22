@@ -18,6 +18,10 @@ const LLM_PROVIDER = (process.env.LLM_PROVIDER || 'groq').toLowerCase();
 const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// 무료 한도는 모델별로 따로 계산되므로, 주 모델이 한도(429)에 걸리면 아직 한도가
+// 남아있는 다른 Gemini 모델로 자동 전환함. Groq로 넘어가지 않아 한국어 품질이 유지됨.
+// 주 모델과 같은 값이면 폴백을 끔(무의미한 중복 호출 방지).
+const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-flash-lite-latest';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // 검수용 2차 LLM 호출(자연스러움/한국어 교정)을 건너뛰는 모드. API 호출 수와
@@ -170,7 +174,7 @@ const GEMINI_THINKING_CONFIGS = [
 ];
 let geminiThinkingIndex = 0;
 
-async function callGemini(systemPrompt, messages, temperature) {
+async function callGeminiModel(model, systemPrompt, messages, temperature) {
   if (!GEMINI_API_KEY) {
     throw new Error('서버에 GEMINI_API_KEY가 설정되어 있지 않아요.');
   }
@@ -180,7 +184,7 @@ async function callGemini(systemPrompt, messages, temperature) {
       ...GEMINI_THINKING_CONFIGS[geminiThinkingIndex]
     };
     const response = await fetchWithRetry(() => fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -197,10 +201,26 @@ async function callGemini(systemPrompt, messages, temperature) {
     }
     if (!response.ok) {
       const errText = await response.text();
-      throw new Error(`Gemini API 오류 (${response.status}): ${errText}`);
+      // 상태 코드를 에러에 실어, 상위(callGemini)에서 429(한도 초과)를 구분해 폴백 판단.
+      const err = new Error(`Gemini API 오류 (${response.status}): ${errText}`);
+      err.status = response.status;
+      throw err;
     }
     const data = await response.json();
     return (data.candidates?.[0]?.content?.parts?.[0]?.text || '').trim();
+  }
+}
+
+// 주 Gemini 모델을 먼저 쓰고, 한도 초과(429)일 때만 예비 Gemini 모델로 전환함.
+// 예비 모델도 무료 등급이라 결국 같은 종류의 답을 주니 한국어 품질은 유지됨.
+async function callGemini(systemPrompt, messages, temperature) {
+  try {
+    return await callGeminiModel(GEMINI_MODEL, systemPrompt, messages, temperature);
+  } catch (e) {
+    const canFallback = e.status === 429 && GEMINI_FALLBACK_MODEL && GEMINI_FALLBACK_MODEL !== GEMINI_MODEL;
+    if (!canFallback) throw e;
+    console.warn(`Gemini 주 모델(${GEMINI_MODEL}) 한도 초과, 예비 모델(${GEMINI_FALLBACK_MODEL})로 전환함`);
+    return callGeminiModel(GEMINI_FALLBACK_MODEL, systemPrompt, messages, temperature);
   }
 }
 
