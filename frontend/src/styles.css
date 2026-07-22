@@ -57,6 +57,24 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
 .pd-bubble-row.user { justify-content: flex-end; }
 .pd-bubble-row.assistant { justify-content: flex-start; }
 .pd-bubble { max-width: 78%; padding: 8px; border-radius: 16px; font-size: 13.5px; line-height: 1.5; }
+
+.pd-greeting-picker { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.pd-greeting-label { font-size: 12px; color: var(--lavender); margin: 0 0 2px; text-align: center; }
+.pd-greeting-card {
+  text-align: left; background: #fff; border: 1px solid rgba(139,127,168,0.3);
+  border-radius: 16px; padding: 11px 14px; font-size: 13.5px; font-family: inherit;
+  color: var(--ink); cursor: pointer; box-shadow: 0 1px 4px rgba(43,58,85,0.06);
+  transition: border-color 0.15s, transform 0.1s;
+}
+.pd-greeting-card:hover { border-color: var(--lavender); }
+.pd-greeting-card:active { transform: scale(0.98); }
+.pd-greeting-custom { display: flex; gap: 6px; margin-top: 2px; }
+.pd-greeting-custom .pd-input { flex: 1; margin: 0; }
+.pd-greeting-custom-btn {
+  background: var(--lavender); color: #fff; border: none; border-radius: 14px;
+  padding: 0 16px; font-size: 13px; font-family: inherit; cursor: pointer; flex-shrink: 0;
+}
+.pd-greeting-custom-btn:disabled { opacity: 0.45; cursor: default; }
 .pd-bubble.assistant { background: var(--peach); color: var(--ink); border-bottom-left-radius: 4px; padding: 10px 14px; }
 .pd-bubble.user { background: var(--lavender); color: #fff; border-bottom-right-radius: 4px; padding: 10px 14px; }
 .pd-typing { display: flex; gap: 4px; padding: 14px; align-items: center; }

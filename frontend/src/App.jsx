@@ -160,22 +160,15 @@ export default function App() {
 
   const todayEntry = data.entries[todayKey] || { messages: [], diaryText: '' };
 
-  const ensureGreeting = useCallback(() => {
-    if (!todayEntry.messages || todayEntry.messages.length === 0) {
-      const greeting = { role: 'assistant', content: `${data.babyName ? withTopicParticle(data.babyName) : '오늘'} 하루 어땠어?` };
-      const next = {
-        ...data,
-        entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: [greeting] } }
-      };
-      persist(next);
-    }
-    // eslint-disable-next-line
-  }, [data, todayEntry, todayKey]);
-
-  useEffect(() => {
-    if (loaded && data.babyName && view === 'chat' && !todayEntry.diaryText) ensureGreeting();
-    // eslint-disable-next-line
-  }, [loaded, data.babyName, view]);
+  // 오늘 대화가 비어 있으면 인사말을 자동으로 넣는 대신 선택 카드를 보여주고,
+  // 사용자가 고른(또는 직접 쓴) 문구를 친구의 첫 질문으로 넣어 대화를 시작함.
+  const startWithGreeting = (content) => {
+    const greeting = { role: 'assistant', content };
+    persist({
+      ...data,
+      entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: [greeting] } }
+    });
+  };
 
   const handleNameSubmit = () => {
     const name = nameInput.trim();
@@ -345,6 +338,9 @@ export default function App() {
               <LetterCard babyName={data.babyName} dateLabel={formatNice(today)} text={todayEntry.diaryText} onBack={backToChat} />
             ) : (
               <div className="pd-chat">
+                {msgsToday.length === 0 && (
+                  <GreetingPicker babyName={data.babyName} onPick={startWithGreeting} />
+                )}
                 {(todayEntry.messages || []).map((m, i) => (
                   <div key={i} className={`pd-bubble-row ${m.role}`}>
                     <div className={`pd-bubble ${m.role}`}>
@@ -503,6 +499,39 @@ export default function App() {
         </div>
       )}
 
+    </div>
+  );
+}
+
+function GreetingPicker({ babyName, onPick }) {
+  const [custom, setCustom] = useState('');
+  const name = babyName || '아기';
+  const options = [
+    `${withTopicParticle(name)} 오늘 하루 어땠어?`,
+    '아침부터 차근차근 얘기해볼까? 오늘 잘 잤어?',
+    '오늘 제일 기억에 남는 순간 있었어?',
+    '오늘 좀 힘들었지? 무슨 일 있었어?'
+  ];
+  const submitCustom = () => {
+    const text = custom.trim();
+    if (text) onPick(text);
+  };
+  return (
+    <div className="pd-greeting-picker">
+      <p className="pd-greeting-label">오늘은 어떤 얘기부터 할까? 친구의 첫 질문을 골라줘</p>
+      {options.map(opt => (
+        <button key={opt} className="pd-greeting-card" onClick={() => onPick(opt)}>{opt}</button>
+      ))}
+      <div className="pd-greeting-custom">
+        <input
+          className="pd-input"
+          value={custom}
+          onChange={e => setCustom(e.target.value)}
+          placeholder="원하는 첫 질문을 직접 써도 돼"
+          onKeyDown={e => { if (e.key === 'Enter') submitCustom(); }}
+        />
+        <button className="pd-greeting-custom-btn" onClick={submitCustom} disabled={!custom.trim()}>시작</button>
+      </div>
     </div>
   );
 }
