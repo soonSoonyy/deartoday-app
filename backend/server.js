@@ -20,10 +20,11 @@ const GROQ_API_KEY = process.env.GROQ_API_KEY;
 const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
-// 검수용 2차 LLM 호출(자연스러움/한국어 교정)을 건너뛰어 응답 속도를 절반 이하로 줄이는 모드.
-// Render 환경변수에 FAST_MODE=true 를 추가하면 켜짐. 문자 오염을 걸러내는
-// 결정적 필터(stripNonKorean 등)는 그대로 유지되고, LLM 재검수만 생략됨.
-const FAST_MODE = /^(1|true|yes)$/i.test(process.env.FAST_MODE || '');
+// 검수용 2차 LLM 호출(자연스러움/한국어 교정)을 건너뛰는 모드. API 호출 수와
+// 응답 시간이 절반으로 줄어서, 무료 등급 한도가 빠듯할 때 특히 중요함.
+// 기본으로 켜두고, 검수까지 되살리고 싶으면 환경변수 FAST_MODE=false 로 끄면 됨.
+// 문자 오염을 걸러내는 결정적 필터(stripNonKorean 등)는 모드와 무관하게 항상 동작함.
+const FAST_MODE = !/^(0|false|no)$/i.test(process.env.FAST_MODE || '');
 
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(DATA_FILE)) {
@@ -101,8 +102,9 @@ function naturalCheckSystemPrompt() {
 
 // 모델 혼잡("high demand", 503 등)은 보통 몇 초 안에 풀리는 일시 현상이라,
 // 바로 실패로 돌려주지 않고 짧게 기다렸다가 두 번 더 시도함.
-// (429는 분당 한도 초과일 수도 있어 함께 재시도 대상에 포함)
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503]);
+// 429(한도 초과)는 재시도하지 않음 — 몇 초 기다려도 풀리지 않는 데다,
+// 재시도 요청 자체가 무료 한도를 더 깎아먹는 역효과만 있음.
+const RETRYABLE_STATUS = new Set([500, 502, 503]);
 const RETRY_DELAYS_MS = [2000, 5000];
 
 async function fetchWithRetry(doFetch) {
@@ -234,7 +236,10 @@ function hasForeignScript(text, babyName) {
   return /[A-Za-z]{2,}/.test(withoutName);
 }
 
-async function callModelKorean(systemPrompt, messages, { temperature, maxRetries = 2, babyName = '' } = {}) {
+// maxRetries 기본값을 1로 둠: 외국 문자 오염은 드문 편이고, 재생성 한 번이면
+// 대부분 해결되는데 두 번씩 다시 만들면 무료 API 한도를 너무 빨리 소모함.
+// (그래도 남는 오염은 stripNonKorean 등 결정적 필터가 마지막에 걸러냄)
+async function callModelKorean(systemPrompt, messages, { temperature, maxRetries = 1, babyName = '' } = {}) {
   let result = await callModel(systemPrompt, messages, temperature);
   let attempts = 0;
   while (hasForeignScript(result, babyName) && attempts < maxRetries) {
