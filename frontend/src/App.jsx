@@ -7,6 +7,19 @@ import {
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
 
+// 성별 값('boy'|'girl'|'')을 화면에 보여줄 이모지+라벨로. 미설정('')이면 안내용 라벨.
+function genderLabel(g) {
+  if (g === 'boy') return '👦 아들';
+  if (g === 'girl') return '👧 딸';
+  return '＋ 성별';
+}
+// 성별 칩을 누를 때 순환: 미설정 → 아들 → 딸 → 아들 …
+function nextGender(g) {
+  if (g === 'boy') return 'girl';
+  if (g === 'girl') return 'boy';
+  return 'boy';
+}
+
 function pad(n) { return String(n).padStart(2, '0'); }
 function formatKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function parseKey(key) {
@@ -68,32 +81,32 @@ async function fetchData() {
   return res.json();
 }
 
-async function saveData(babyName, entries) {
+async function saveData(babyName, babyGender, entries) {
   const res = await fetch('/api/data', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, entries })
+    body: JSON.stringify({ babyName, babyGender, entries })
   });
   if (!res.ok) throw new Error('데이터를 저장하지 못했어요.');
   return res.json();
 }
 
-async function requestChatReply(babyName, messages) {
+async function requestChatReply(babyName, babyGender, messages) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, messages })
+    body: JSON.stringify({ babyName, babyGender, messages })
   });
   if (!res.ok) throw new Error('답장을 받아오지 못했어요.');
   const data = await res.json();
   return data.reply;
 }
 
-async function requestDiary(babyName, content) {
+async function requestDiary(babyName, babyGender, content) {
   const res = await fetch('/api/diary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, content })
+    body: JSON.stringify({ babyName, babyGender, content })
   });
   if (!res.ok) throw new Error('일기를 완성하지 못했어요.');
   const data = await res.json();
@@ -102,10 +115,13 @@ async function requestDiary(babyName, content) {
 
 export default function App() {
   const [loaded, setLoaded] = useState(false);
-  const [data, setData] = useState({ babyName: '', entries: {} });
+  const [data, setData] = useState({ babyName: '', babyGender: '', entries: {} });
   const [view, setView] = useState('chat');
   const [nameInput, setNameInput] = useState('');
   const [editingName, setEditingName] = useState(false);
+  // 온보딩(처음 시작) 단계: 'name'(이름 입력) → 'gender'(성별 선택)
+  const [onboardStep, setOnboardStep] = useState('name');
+  const [genderInput, setGenderInput] = useState('');
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -126,7 +142,7 @@ export default function App() {
     (async () => {
       try {
         const parsed = await fetchData();
-        setData({ babyName: parsed.babyName || '', entries: parsed.entries || {} });
+        setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', entries: parsed.entries || {} });
       } catch (e) {
         console.error(e);
       }
@@ -137,7 +153,7 @@ export default function App() {
   const persist = useCallback(async (next) => {
     setData(next);
     try {
-      await saveData(next.babyName, next.entries);
+      await saveData(next.babyName, next.babyGender, next.entries);
     } catch (e) {
       console.error('저장 실패', e);
     }
@@ -176,10 +192,22 @@ export default function App() {
     });
   };
 
-  const handleNameSubmit = () => {
+  // 온보딩 1단계: 이름을 확인하고 성별 선택 단계로 넘어감(아직 저장하지 않음).
+  const handleNameNext = () => {
+    if (!nameInput.trim()) return;
+    setOnboardStep('gender');
+  };
+
+  // 온보딩 2단계: 이름 + 성별을 함께 저장하며 앱을 시작함.
+  const handleOnboardFinish = (gender) => {
     const name = nameInput.trim();
-    if (!name) return;
-    persist({ ...data, babyName: name });
+    if (!name || !gender) return;
+    persist({ ...data, babyName: name, babyGender: gender });
+  };
+
+  // 이미 시작한 뒤엔 상단 성별 칩을 눌러 아들/딸을 바꿀 수 있음.
+  const cycleGender = () => {
+    persist({ ...data, babyGender: nextGender(data.babyGender) });
   };
 
   const handleRenameSubmit = () => {
@@ -214,7 +242,7 @@ export default function App() {
     setSending(true);
     try {
       const apiMessages = buildApiMessages(msgs);
-      const reply = await requestChatReply(data.babyName, apiMessages);
+      const reply = await requestChatReply(data.babyName, data.babyGender, apiMessages);
       const withReply = [...msgs, { role: 'assistant', content: reply || '...' }];
       await persist({ ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: withReply } } });
     } catch (e) {
@@ -234,7 +262,7 @@ export default function App() {
         const who = m.role === 'user' ? '부모: ' : '친구: ';
         return who + (m.content || '');
       }).join('\n');
-      const diaryText = await requestDiary(data.babyName, transcript);
+      const diaryText = await requestDiary(data.babyName, data.babyGender, transcript);
       const next = { ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, diaryText, createdAt: new Date().toISOString() } } };
       await persist(next);
     } catch (e) {
@@ -272,23 +300,49 @@ export default function App() {
   };
 
   if (loaded && !data.babyName) {
+    const babyLabel = nameInput.trim() || '아기';
     return (
       <div className="pd-root">
         <div className="pd-onboard">
           <div className="pd-onboard-moon"><Moon size={28} /></div>
           <h1 className="pd-title">Dear, Today</h1>
           <p className="pd-sub">아가에게 쓰는 하루 이야기</p>
-          <div className="pd-onboard-card">
-            <p className="pd-onboard-label">아기 이름을 알려줘</p>
-            <input
-              className="pd-input"
-              value={nameInput}
-              onChange={e => setNameInput(e.target.value)}
-              placeholder="예: 하늘이"
-              onKeyDown={e => { if (e.key === 'Enter' && !isImeComposing(e)) handleNameSubmit(); }}
-            />
-            <button className="pd-btn-primary" onClick={handleNameSubmit}>시작하기</button>
-          </div>
+          {onboardStep === 'name' ? (
+            <div className="pd-onboard-card">
+              <p className="pd-onboard-label">아기 이름을 알려줘</p>
+              <input
+                className="pd-input"
+                value={nameInput}
+                onChange={e => setNameInput(e.target.value)}
+                placeholder="예: 하늘이"
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter' && !isImeComposing(e)) handleNameNext(); }}
+              />
+              <button className="pd-btn-primary" onClick={handleNameNext} disabled={!nameInput.trim()}>다음</button>
+            </div>
+          ) : (
+            <div className="pd-onboard-card">
+              <p className="pd-onboard-label">{babyLabel}는 남자아이인가요, 여자아이인가요?</p>
+              <div className="pd-gender-choices">
+                <button
+                  className={`pd-gender-choice ${genderInput === 'boy' ? 'selected' : ''}`}
+                  onClick={() => setGenderInput('boy')}
+                >
+                  <span className="pd-gender-emoji">👦</span>
+                  <span>남자아이</span>
+                </button>
+                <button
+                  className={`pd-gender-choice ${genderInput === 'girl' ? 'selected' : ''}`}
+                  onClick={() => setGenderInput('girl')}
+                >
+                  <span className="pd-gender-emoji">👧</span>
+                  <span>여자아이</span>
+                </button>
+              </div>
+              <button className="pd-btn-primary" onClick={() => handleOnboardFinish(genderInput)} disabled={!genderInput}>시작하기</button>
+              <button className="pd-onboard-back" onClick={() => setOnboardStep('name')}>← 이름 다시 입력</button>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -317,9 +371,14 @@ export default function App() {
             <div>
               <div className="pd-app-title">Dear, Today</div>
               {!editingName ? (
-                <button className="pd-baby-name" onClick={() => { setNameInput(data.babyName); setEditingName(true); }}>
-                  {data.babyName} <Pencil size={11} />
-                </button>
+                <div className="pd-name-row">
+                  <button className="pd-baby-name" onClick={() => { setNameInput(data.babyName); setEditingName(true); }}>
+                    {data.babyName} <Pencil size={11} />
+                  </button>
+                  <button className="pd-gender-chip" onClick={cycleGender} title="아기 성별 (눌러서 바꾸기)">
+                    {genderLabel(data.babyGender)}
+                  </button>
+                </div>
               ) : (
                 <input
                   className="pd-name-edit"

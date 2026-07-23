@@ -42,7 +42,10 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
 .pd-header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
 .pd-moon-icon { color: var(--lavender); flex-shrink: 0; margin-top: 3px; }
 .pd-app-title { font-size: 20px; font-weight: 700; line-height: 1.1; }
-.pd-baby-name { font-size: 12px; color: var(--rose-dark); background: none; border: none; padding: 0; margin-top: 2px; display: flex; align-items: center; gap: 3px; cursor: pointer; font-family: inherit; }
+.pd-name-row { display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap; }
+.pd-baby-name { font-size: 12px; color: var(--rose-dark); background: none; border: none; padding: 0; display: flex; align-items: center; gap: 3px; cursor: pointer; font-family: inherit; }
+.pd-gender-chip { font-size: 10.5px; color: var(--lavender); background: rgba(139,127,168,0.12); border: 1px solid rgba(139,127,168,0.25); border-radius: 999px; padding: 1px 8px; cursor: pointer; font-family: inherit; line-height: 1.5; white-space: nowrap; }
+.pd-gender-chip:hover { background: rgba(139,127,168,0.2); }
 .pd-name-edit { font-size: 12px; border: none; border-bottom: 1px solid var(--rose); background: transparent; outline: none; width: 90px; margin-top: 2px; font-family: inherit; color: var(--ink); }
 .pd-header-date { font-size: 11px; color: var(--lavender); white-space: nowrap; }
 .pd-privacy-btn { display: flex; align-items: center; gap: 3px; background: none; border: none; color: rgba(43,58,85,0.35); font-size: 10px; cursor: pointer; padding: 0; font-family: inherit; }
@@ -129,6 +132,19 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
 .pd-input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(43,58,85,0.15); font-size: 14px; font-family: inherit; outline: none; margin-bottom: 12px; }
 .pd-input:focus { border-color: var(--lavender); }
 .pd-btn-primary { width: 100%; padding: 10px; border-radius: 10px; border: none; background: var(--rose); color: #fff; font-size: 13.5px; font-family: inherit; cursor: pointer; }
+.pd-btn-primary:disabled { opacity: 0.45; cursor: default; }
+
+.pd-gender-choices { display: flex; gap: 10px; margin-bottom: 14px; }
+.pd-gender-choice {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 16px 8px; border-radius: 14px; background: #fff;
+  border: 2px solid rgba(43,58,85,0.12); font-size: 13px; font-family: inherit;
+  color: var(--ink); cursor: pointer; transition: border-color 0.15s, background 0.15s;
+}
+.pd-gender-choice:hover { border-color: rgba(139,127,168,0.5); }
+.pd-gender-choice.selected { border-color: var(--rose); background: rgba(217,142,155,0.1); }
+.pd-gender-emoji { font-size: 30px; line-height: 1; }
+.pd-onboard-back { width: 100%; margin-top: 10px; background: none; border: none; color: var(--lavender); font-size: 12px; font-family: inherit; cursor: pointer; }
 
 .pd-loading { color: #fff; }
 .pd-spin { animation: pd-rotate 1s linear infinite; }

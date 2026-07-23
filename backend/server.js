@@ -37,7 +37,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 // 문자 오염을 걸러내는 결정적 필터(stripNonKorean 등)는 모드와 무관하게 항상 동작함.
 const FAST_MODE = !/^(0|false|no)$/i.test(process.env.FAST_MODE || '');
 
-const EMPTY_DATA = { babyName: '', entries: {} };
+const EMPTY_DATA = { babyName: '', babyGender: '', entries: {} };
 
 // ---- 저장소 계층: DB 모드(Postgres/Supabase) 또는 파일 모드 ----
 // 데이터 형태는 두 모드 모두 { babyName, entries } JSON 블롭 하나로 동일함.
@@ -60,11 +60,14 @@ async function initStorage() {
       CREATE TABLE IF NOT EXISTS deartoday_state (
         id SMALLINT PRIMARY KEY DEFAULT 1,
         baby_name TEXT NOT NULL DEFAULT '',
+        baby_gender TEXT NOT NULL DEFAULT '',
         entries JSONB NOT NULL DEFAULT '{}'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         CONSTRAINT deartoday_single_row CHECK (id = 1)
       );
     `);
+    // 이미 baby_gender 없이 만들어진 기존 테이블에도 안전하게 컬럼을 추가함(있으면 그냥 넘어감).
+    await pool.query(`ALTER TABLE deartoday_state ADD COLUMN IF NOT EXISTS baby_gender TEXT NOT NULL DEFAULT '';`);
     await pool.query(`INSERT INTO deartoday_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;`);
     console.log('✅ 저장소: Postgres(DB) 연결됨 — 데이터가 영구 보존돼요.');
   } else {
@@ -78,25 +81,26 @@ async function initStorage() {
 
 async function loadData() {
   if (USE_DB) {
-    const { rows } = await pool.query('SELECT baby_name, entries FROM deartoday_state WHERE id = 1;');
+    const { rows } = await pool.query('SELECT baby_name, baby_gender, entries FROM deartoday_state WHERE id = 1;');
     if (rows.length === 0) return { ...EMPTY_DATA };
-    return { babyName: rows[0].baby_name || '', entries: rows[0].entries || {} };
+    return { babyName: rows[0].baby_name || '', babyGender: rows[0].baby_gender || '', entries: rows[0].entries || {} };
   }
   const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-  return JSON.parse(raw);
+  return { ...EMPTY_DATA, ...JSON.parse(raw) };
 }
 
-async function saveDataStore(babyName, entries) {
+async function saveDataStore(babyName, babyGender, entries) {
   const name = babyName || '';
+  const gender = babyGender || '';
   const items = entries || {};
   if (USE_DB) {
     await pool.query(
-      `UPDATE deartoday_state SET baby_name = $1, entries = $2, updated_at = now() WHERE id = 1;`,
-      [name, JSON.stringify(items)]
+      `UPDATE deartoday_state SET baby_name = $1, baby_gender = $2, entries = $3, updated_at = now() WHERE id = 1;`,
+      [name, gender, JSON.stringify(items)]
     );
     return;
   }
-  fs.writeFileSync(DATA_FILE, JSON.stringify({ babyName: name, entries: items }, null, 2));
+  fs.writeFileSync(DATA_FILE, JSON.stringify({ babyName: name, babyGender: gender, entries: items }, null, 2));
 }
 
 if (LLM_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
@@ -111,9 +115,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-function chatSystemPrompt(babyName) {
+// 성별 값('boy'|'girl'|'')을 프롬프트에 넣을 한 줄 안내로 바꿈. 값이 없으면 빈 문자열.
+function genderNote(name, babyGender) {
+  if (babyGender === 'boy') return `\n- ${name}는 남자아이(아들)야. 필요하면 자연스럽게 아들로 지칭해도 좋아.`;
+  if (babyGender === 'girl') return `\n- ${name}는 여자아이(딸)야. 필요하면 자연스럽게 딸로 지칭해도 좋아.`;
+  return '';
+}
+
+function chatSystemPrompt(babyName, babyGender) {
   const name = babyName || '아기';
-  return `너는 사용자의 절친한 친구야. 사용자는 ${name}를 키우는 부모이고, 아기를 재운 뒤 밤에 하루를 돌아보며 너랑 카톡하듯 편하게 대화하는 중이야.
+  return `너는 사용자의 절친한 친구야. 사용자는 ${name}를 키우는 부모이고, 아기를 재운 뒤 밤에 하루를 돌아보며 너랑 카톡하듯 편하게 대화하는 중이야.${genderNote(name, babyGender)}
 - 반드시 한국어로만 답해. 다른 언어나 문자는 섞지 마
 - 친구 같은 어투로 완전 반말을 사용해
 - 욕설, 비속어, 과격한 말은 절대 사용하지 마
@@ -126,9 +137,9 @@ function chatSystemPrompt(babyName) {
 - 부모가 주어를 생략하고 말하면(예: "오늘 신나게 놀았어"), 문맥상 명백히 부모 얘기가 아닌 이상 그 문장의 주어를 ${name}로 우선 이해하고 반응해`;
 }
 
-function diarySystemPrompt(babyName) {
+function diarySystemPrompt(babyName, babyGender) {
   const name = babyName || '아가';
-  return `다음은 부모와 나눈, 오늘 하루 ${name}에 대한 대화 내용이야. 이 내용을 바탕으로 엄마가 ${name}에게 쓰는 편지 형식의 하루 일기를 작성해줘.
+  return `다음은 부모와 나눈, 오늘 하루 ${name}에 대한 대화 내용이야. 이 내용을 바탕으로 엄마가 ${name}에게 쓰는 편지 형식의 하루 일기를 작성해줘.${genderNote(name, babyGender)}
 
 규칙:
 - 반드시 한국어로만 쓸 것. 일본어, 영어, 한자 등 다른 언어나 문자는 단 한 글자도 섞지 말 것
@@ -418,8 +429,8 @@ app.get('/api/data', async (req, res) => {
 
 app.post('/api/data', async (req, res) => {
   try {
-    const { babyName, entries } = req.body || {};
-    await saveDataStore(babyName, entries);
+    const { babyName, babyGender, entries } = req.body || {};
+    await saveDataStore(babyName, babyGender, entries);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -430,11 +441,11 @@ app.post('/api/data', async (req, res) => {
 // ---- 채팅 답장 ----
 app.post('/api/chat', async (req, res) => {
   try {
-    const { babyName, messages } = req.body || {};
+    const { babyName, babyGender, messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages가 비어있어요.' });
     }
-    const draft = await callModelKorean(chatSystemPrompt(babyName), messages, { babyName });
+    const draft = await callModelKorean(chatSystemPrompt(babyName, babyGender), messages, { babyName });
     const reply = await naturalizeReply(draft, messages, babyName);
     res.json({ reply });
   } catch (e) {
@@ -446,9 +457,9 @@ app.post('/api/chat', async (req, res) => {
 // ---- 일기(편지) 생성 ----
 app.post('/api/diary', async (req, res) => {
   try {
-    const { babyName, content } = req.body || {};
+    const { babyName, babyGender, content } = req.body || {};
     if (!content) return res.status(400).json({ error: 'content가 비어있어요.' });
-    const draft = await callModelKorean(diarySystemPrompt(babyName), [{ role: 'user', content }], { babyName });
+    const draft = await callModelKorean(diarySystemPrompt(babyName, babyGender), [{ role: 'user', content }], { babyName });
     const diaryText = await ensureKoreanDiary(draft, babyName);
     res.json({ diaryText });
   } catch (e) {
