@@ -29,36 +29,45 @@ parenting-diary-app/
     └── package.json
 ```
 
-## 실행 방법
+## 로컬에서 실행하기
 
-### 1. 백엔드 (API 서버)
+### 1. API 키 설정
 
 ```bash
 cd backend
-npm install
 cp .env.example .env
 ```
 
-`.env` 파일을 열어서 `GROQ_API_KEY`에 본인의 Groq API 키를 넣어주세요.
-(키는 https://console.groq.com/keys 에서 발급받을 수 있어요.)
+`.env` 파일을 열어서 쓰려는 제공자의 키를 채워주세요.
+- Gemini를 쓸 거면(기본값): `GEMINI_API_KEY` (https://aistudio.google.com/apikey 에서 발급)
+- Groq를 쓸 거면: `.env`의 `LLM_PROVIDER=groq`로 바꾸고 `GROQ_API_KEY` (https://console.groq.com/keys)
+
+> 일기 데이터는 `DATABASE_URL`을 비워두면 `backend/data/diary-data.json` 파일에 저장돼요. 로컬 개발에는 이걸로 충분하고, 별도 DB 설정이 필요 없어요.
+
+### 2. 한 번에 실행 (권장)
+
+저장소 루트에서:
 
 ```bash
-npm start
-```
-
-`http://localhost:4000` 에서 서버가 실행돼요.
-
-### 2. 프론트엔드 (React 앱)
-
-새 터미널을 열고:
-
-```bash
-cd frontend
-npm install
-npm run dev
+npm run install:all   # 루트·backend·frontend 의존성을 한 번에 설치 (처음 한 번만)
+npm run dev           # 백엔드(:4000)와 프론트엔드(:5173)를 동시에 실행
 ```
 
 `http://localhost:5173` 에서 앱이 열려요. 개발 서버가 `/api/*` 요청을 자동으로 백엔드(4000번 포트)로 전달해줘요 (`vite.config.js`의 proxy 설정).
+
+### 실행 방법 (터미널을 따로 쓰고 싶을 때)
+
+터미널 1 — 백엔드:
+
+```bash
+cd backend && npm install && npm start
+```
+
+터미널 2 — 프론트엔드:
+
+```bash
+cd frontend && npm install && npm run dev
+```
 
 ## 주요 기능
 

@@ -1,0 +1,15 @@
+{
+  "name": "deartoday-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "로컬 개발용 편의 스크립트 (백엔드+프론트엔드를 한 번에 실행)",
+  "scripts": {
+    "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install",
+    "dev": "concurrently -n backend,frontend -c blue,magenta \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
