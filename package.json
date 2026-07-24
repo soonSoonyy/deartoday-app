@@ -7,7 +7,8 @@
     "install:all": "npm install && npm --prefix backend install && npm --prefix frontend install",
     "dev": "concurrently -n backend,frontend -c blue,magenta \"npm --prefix backend run dev\" \"npm --prefix frontend run dev\"",
     "build": "npm --prefix frontend run build",
-    "start": "npm --prefix backend start"
+    "start": "npm --prefix backend start",
+    "start:local": "npm run build && npm run start"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

@@ -69,6 +69,26 @@ cd backend && npm install && npm start
 cd frontend && npm install && npm run dev
 ```
 
+### 배포 서버를 로컬에서 그대로 실행 (실제 DB 연결)
+
+개발용 2-서버 방식(:4000 + :5173) 대신, **배포 때와 똑같은 단일 서버**(백엔드가 빌드된 프론트엔드까지 함께 서빙)를 로컬에서 띄우고 싶을 때 써요. 실제 Supabase DB에 연결한 상태 그대로 확인할 수 있어요.
+
+1. `backend/.env` 에 실제 DB 연결 문자열을 넣어요 (Supabase는 Session pooler URI 권장):
+
+   ```
+   DATABASE_URL=postgresql://postgres.xxxx:비밀번호@aws-0-지역.pooler.supabase.com:5432/postgres
+   ```
+
+2. 저장소 루트에서:
+
+   ```bash
+   npm run start:local
+   ```
+
+   프론트엔드를 빌드한 뒤 백엔드 서버 하나를 띄워요. **http://localhost:4000** 하나로 화면과 API가 모두 열려요 (배포 환경과 동일).
+
+> `DATABASE_URL` 을 넣지 않으면 로컬 파일에 저장되고, 넣으면 그 DB(=배포와 같은 데이터)에 연결돼요. "DB는 그대로 두고 배포 서버만 로컬로" 확인할 때 이 방식을 쓰면 돼요.
+
 ## 주요 기능
 
 - **대화형 일기 작성**: 친구처럼 반말로 오늘 하루를 물어보고, 답변을 모아 한 번에 AI 답장을 받아요 ("답장 받기" 버튼).
