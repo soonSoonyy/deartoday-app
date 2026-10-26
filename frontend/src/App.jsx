@@ -113,8 +113,55 @@ async function requestDiary(babyName, babyGender, content) {
   return data.diaryText;
 }
 
+// ---- 인증 관련 API ----
+async function fetchProviders() {
+  try {
+    const res = await fetch('/api/auth/providers');
+    if (!res.ok) throw new Error();
+    return res.json();
+  } catch {
+    return { google: false, kakao: false, email: true };
+  }
+}
+
+async function fetchMe() {
+  const res = await fetch('/api/auth/me');
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.user;
+}
+
+async function emailSignup(email, password, displayName) {
+  const res = await fetch('/api/auth/signup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, displayName })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || '가입에 실패했어요.');
+  return data.user;
+}
+
+async function emailLogin(email, password) {
+  const res = await fetch('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || '로그인에 실패했어요.');
+  return data.user;
+}
+
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+}
+
 export default function App() {
   const [loaded, setLoaded] = useState(false);
+  const [authLoaded, setAuthLoaded] = useState(false);
+  const [user, setUser] = useState(null);
+  const [providers, setProviders] = useState({ google: false, kakao: false, email: true });
   const [data, setData] = useState({ babyName: '', babyGender: '', entries: {} });
   const [view, setView] = useState('chat');
   const [nameInput, setNameInput] = useState('');
@@ -138,16 +185,46 @@ export default function App() {
   const today = new Date();
   const todayKey = formatKey(today);
 
+  // 앱이 뜨면 먼저 로그인 상태를 확인하고, 로그인돼 있으면 그 사용자의 일기를 불러옴.
   useEffect(() => {
     (async () => {
-      try {
-        const parsed = await fetchData();
-        setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', entries: parsed.entries || {} });
-      } catch (e) {
-        console.error(e);
+      const [me, prov] = await Promise.all([fetchMe(), fetchProviders()]);
+      setProviders(prov);
+      setUser(me);
+      if (me) {
+        try {
+          const parsed = await fetchData();
+          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', entries: parsed.entries || {} });
+        } catch (e) {
+          console.error(e);
+        }
+        setLoaded(true);
       }
-      setLoaded(true);
+      setAuthLoaded(true);
     })();
+  }, []);
+
+  // 로그인/회원가입 성공 시: 사용자 설정 후 그 사람의 일기를 불러옴.
+  const onAuthed = useCallback(async (u) => {
+    setUser(u);
+    try {
+      const parsed = await fetchData();
+      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', entries: parsed.entries || {} });
+    } catch (e) {
+      console.error(e);
+    }
+    setLoaded(true);
+  }, []);
+
+  const handleLogout = useCallback(async () => {
+    try { await logout(); } catch (e) { console.error(e); }
+    setUser(null);
+    setData({ babyName: '', babyGender: '', entries: {} });
+    setView('chat');
+    setShowPrivacy(false);
+    setOnboardStep('name');
+    setNameInput('');
+    setGenderInput('');
   }, []);
 
   const persist = useCallback(async (next) => {
@@ -298,6 +375,19 @@ export default function App() {
     }
     window.location.reload();
   };
+
+  // 인증 상태 확인 전엔 로딩, 로그인 안 돼 있으면 로그인 화면.
+  if (!authLoaded) {
+    return (
+      <div className="pd-root">
+        <div className="pd-loading"><Loader2 className="pd-spin" size={22} /></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <AuthScreen providers={providers} onAuthed={onAuthed} />;
+  }
 
   if (loaded && !data.babyName) {
     const babyLabel = nameInput.trim() || '아기';
@@ -525,11 +615,20 @@ export default function App() {
             <div className="pd-privacy-panel">
               <div className="pd-privacy-icon"><ShieldCheck size={20} /></div>
               <h2 className="pd-privacy-title">개인정보 안내</h2>
+              {user && (
+                <div className="pd-account-row">
+                  <span className="pd-account-info">
+                    {user.email || user.displayName || '로그인됨'}
+                    {user.provider !== 'local' && <span className="pd-account-badge">{user.provider === 'google' ? 'Google' : user.provider === 'kakao' ? 'Kakao' : user.provider}</span>}
+                  </span>
+                  <button className="pd-logout-btn" onClick={handleLogout}>로그아웃</button>
+                </div>
+              )}
               <ul className="pd-privacy-text">
                 <li>AI API 키는 백엔드 서버에만 저장돼. 브라우저(프론트엔드)로는 절대 전달되지 않아.</li>
-                <li>대화·일기는 백엔드 서버가 관리하는 저장소(DB 또는 로컬 파일)에 저장돼.</li>
+                <li>대화·일기는 로그인한 계정별로 분리되어 저장돼. 다른 사람은 네 일기를 볼 수 없어.</li>
                 <li>일기를 쓰기 위해 대화 내용이 서버를 거쳐 AI 모델로 전송돼. 민감한 정보는 되도록 적게 남기는 걸 추천해.</li>
-                <li>실제 서비스로 배포할 땐 저장 데이터 암호화, HTTPS·로그인 등 접근 제어를 추가하는 걸 추천해.</li>
+                <li>실제 서비스로 배포할 땐 저장 데이터 암호화, HTTPS 등 접근 제어를 추가하는 걸 추천해.</li>
               </ul>
               {!confirmDelete ? (
                 <button className="pd-btn-danger" onClick={() => setConfirmDelete(true)}>
@@ -566,6 +665,84 @@ export default function App() {
         </div>
       )}
 
+    </div>
+  );
+}
+
+// 로그인/회원가입 화면 — 이메일, 구글, 카카오 세 가지 방식.
+function AuthScreen({ providers, onAuthed }) {
+  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // OAuth 콜백이 실패하면 ?auth_error=... 로 돌아옴. 메시지로 보여주고 주소는 깔끔히 정리.
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search);
+    const err = p.get('auth_error');
+    if (err === 'google') setError('구글 로그인에 실패했어. 다시 시도해줘.');
+    else if (err === 'kakao') setError('카카오 로그인에 실패했어. 다시 시도해줘.');
+    else if (err === 'state') setError('로그인 세션이 만료됐어. 다시 시도해줘.');
+    if (err) window.history.replaceState({}, '', window.location.pathname);
+  }, []);
+
+  const submit = async () => {
+    if (busy) return;
+    setError('');
+    setBusy(true);
+    try {
+      const u = mode === 'signup'
+        ? await emailSignup(email.trim(), password, displayName.trim())
+        : await emailLogin(email.trim(), password);
+      await onAuthed(u);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const social = (name) => {
+    if (!providers[name]) {
+      setError(name === 'google' ? '구글 로그인은 아직 설정 중이야.' : '카카오 로그인은 아직 설정 중이야.');
+      return;
+    }
+    window.location.href = `/api/auth/${name}`;
+  };
+
+  const onEnter = (e) => { if (e.key === 'Enter' && !isImeComposing(e)) submit(); };
+
+  return (
+    <div className="pd-root">
+      <div className="pd-onboard">
+        <div className="pd-onboard-moon"><Moon size={28} /></div>
+        <h1 className="pd-title">Dear, Today</h1>
+        <p className="pd-sub">아가에게 쓰는 하루 이야기</p>
+        <div className="pd-onboard-card">
+          <div className="pd-auth-tabs">
+            <button className={`pd-auth-tab ${mode === 'login' ? 'active' : ''}`} onClick={() => { setMode('login'); setError(''); }}>로그인</button>
+            <button className={`pd-auth-tab ${mode === 'signup' ? 'active' : ''}`} onClick={() => { setMode('signup'); setError(''); }}>회원가입</button>
+          </div>
+          <input className="pd-input" type="email" autoComplete="email" placeholder="이메일" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={onEnter} />
+          <input className="pd-input" type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder="비밀번호 (6자 이상)" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={onEnter} />
+          {mode === 'signup' && (
+            <input className="pd-input" placeholder="닉네임 (선택)" value={displayName} onChange={e => setDisplayName(e.target.value)} onKeyDown={onEnter} />
+          )}
+          {error && <div className="pd-auth-error">{error}</div>}
+          <button className="pd-btn-primary" onClick={submit} disabled={busy}>
+            {busy ? '잠시만...' : (mode === 'signup' ? '가입하고 시작하기' : '로그인')}
+          </button>
+          <div className="pd-auth-divider"><span>또는</span></div>
+          <button className="pd-social pd-social-google" onClick={() => social('google')}>
+            <span className="pd-social-mark">G</span> 구글로 계속하기
+          </button>
+          <button className="pd-social pd-social-kakao" onClick={() => social('kakao')}>
+            <span className="pd-social-mark">K</span> 카카오로 계속하기
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

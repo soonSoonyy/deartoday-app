@@ -5,6 +5,9 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import pg from 'pg';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import cookieParser from 'cookie-parser';
 
 dotenv.config();
 
@@ -14,10 +17,25 @@ const DATA_FILE = path.join(DATA_DIR, 'diary-data.json');
 const PORT = process.env.PORT || 4000;
 
 // 저장소 선택: DATABASE_URL(예: Supabase 연결 문자열)이 있으면 Postgres에 저장하고,
-// 없으면 예전처럼 로컬 JSON 파일에 저장함. 덕분에 배포 환경은 DB로 영구 보존되고,
-// 로컬 개발은 DB 없이도 파일만으로 그대로 돌아감.
+// 없으면 로컬 JSON 파일에 저장함. 둘 다 사용자별 계정/일기를 지원함.
 const DATABASE_URL = process.env.DATABASE_URL;
 const USE_DB = !!DATABASE_URL;
+
+// ---- 인증 관련 설정 ----
+// JWT 서명 키. 운영에서는 반드시 환경변수로 지정해야 하고, 없으면 임시 키로 동작하되 경고함.
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-insecure-secret-change-me';
+const JWT_TTL = '30d'; // 로그인 유지 기간
+const COOKIE_NAME = 'deartoday_token';
+// OAuth 콜백 주소를 만들 때 쓰는 앱의 공개 베이스 URL (예: https://deartoday-xxx.onrender.com).
+// 로컬에서는 http://localhost:4000. 뒤 슬래시는 떼서 보관.
+const APP_BASE_URL = (process.env.APP_BASE_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
+// 구글/카카오 OAuth 앱 자격증명(각 개발자 콘솔에서 발급). 없으면 해당 버튼만 비활성화됨.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const KAKAO_REST_API_KEY = process.env.KAKAO_REST_API_KEY;
+const KAKAO_CLIENT_SECRET = process.env.KAKAO_CLIENT_SECRET; // 카카오는 선택(보안 강화용)
+const GOOGLE_ENABLED = !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+const KAKAO_ENABLED = !!KAKAO_REST_API_KEY;
 
 // 어떤 LLM 제공자를 쓸지는 코드가 아니라 .env의 LLM_PROVIDER 값으로 결정함 ('groq' | 'gemini').
 // 두 제공자 구현을 모두 코드에 남겨두고, 여기서 하나만 골라 쓰는 스위치 역할만 함.
@@ -39,12 +57,26 @@ const FAST_MODE = !/^(0|false|no)$/i.test(process.env.FAST_MODE || '');
 
 const EMPTY_DATA = { babyName: '', babyGender: '', entries: {} };
 
-// ---- 저장소 계층: DB 모드(Postgres/Supabase) 또는 파일 모드 ----
-// 데이터 형태는 두 모드 모두 { babyName, entries } JSON 블롭 하나로 동일함.
-// DB 모드에서는 이 블롭을 deartoday_state 테이블의 단일 행에 통째로 저장함.
-// (앱이 전체 데이터를 한 번에 읽고 한 번에 쓰는 구조라, 행 하나에 JSONB로 담는 게 가장 단순하고 안전함)
+// ---- 저장소 계층: 사용자(users) + 사용자별 일기(diaries) ----
+// DB 모드(Postgres/Supabase)와 파일 모드(JSON) 둘 다 지원함.
+// 파일 모드 구조: { users: [ {id, email, passwordHash, provider, providerId, displayName, createdAt} ],
+//                   diaries: { [userId]: { babyName, babyGender, entries } } }
 
 let pool = null;
+let fileDb = null; // 파일 모드일 때 메모리에 올려두는 전체 데이터
+
+function readFileDb() {
+  try {
+    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    return { users: parsed.users || [], diaries: parsed.diaries || {} };
+  } catch {
+    return { users: [], diaries: {} };
+  }
+}
+function writeFileDb() {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(fileDb, null, 2));
+}
 
 async function initStorage() {
   if (USE_DB) {
@@ -55,52 +87,119 @@ async function initStorage() {
       connectionString: DATABASE_URL,
       ssl: isLocal ? false : { rejectUnauthorized: false }
     });
-    // 서버가 켜질 때 테이블과 초기 행을 자동으로 만들어, 사용자가 SQL을 따로 실행할 필요 없음.
+    // 서버가 켜질 때 테이블을 자동으로 만들어, 사용자가 SQL을 따로 실행할 필요 없음.
     await pool.query(`
-      CREATE TABLE IF NOT EXISTS deartoday_state (
-        id SMALLINT PRIMARY KEY DEFAULT 1,
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE,
+        password_hash TEXT,
+        provider TEXT NOT NULL DEFAULT 'local',
+        provider_id TEXT,
+        display_name TEXT NOT NULL DEFAULT '',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    // 같은 소셜 제공자+계정ID 조합은 유일해야 함(중복 가입 방지).
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS users_provider_uidx ON users (provider, provider_id) WHERE provider_id IS NOT NULL;`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS diaries (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         baby_name TEXT NOT NULL DEFAULT '',
         baby_gender TEXT NOT NULL DEFAULT '',
         entries JSONB NOT NULL DEFAULT '{}'::jsonb,
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-        CONSTRAINT deartoday_single_row CHECK (id = 1)
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
-    // 이미 baby_gender 없이 만들어진 기존 테이블에도 안전하게 컬럼을 추가함(있으면 그냥 넘어감).
-    await pool.query(`ALTER TABLE deartoday_state ADD COLUMN IF NOT EXISTS baby_gender TEXT NOT NULL DEFAULT '';`);
-    await pool.query(`INSERT INTO deartoday_state (id) VALUES (1) ON CONFLICT (id) DO NOTHING;`);
-    console.log('✅ 저장소: Postgres(DB) 연결됨 — 데이터가 영구 보존돼요.');
+    console.log('✅ 저장소: Postgres(DB) 연결됨 — 계정/일기가 사용자별로 영구 보존돼요.');
   } else {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(EMPTY_DATA, null, 2));
-    }
+    fileDb = readFileDb();
+    writeFileDb();
     console.log('ℹ️  저장소: 로컬 파일(diary-data.json) — DATABASE_URL이 없어 파일에 저장해요.');
   }
 }
 
-async function loadData() {
+// ---- 사용자 조회/생성 ----
+function rowToUser(r) {
+  if (!r) return null;
+  return {
+    id: r.id, email: r.email || '', passwordHash: r.password_hash || null,
+    provider: r.provider, providerId: r.provider_id || null,
+    displayName: r.display_name || '', createdAt: r.created_at
+  };
+}
+
+async function findUserByEmail(email) {
+  const key = (email || '').trim().toLowerCase();
+  if (!key) return null;
   if (USE_DB) {
-    const { rows } = await pool.query('SELECT baby_name, baby_gender, entries FROM deartoday_state WHERE id = 1;');
+    const { rows } = await pool.query('SELECT * FROM users WHERE lower(email) = $1 LIMIT 1;', [key]);
+    return rowToUser(rows[0]);
+  }
+  return fileDb.users.find(u => (u.email || '').toLowerCase() === key) || null;
+}
+
+async function findUserByProvider(provider, providerId) {
+  if (USE_DB) {
+    const { rows } = await pool.query('SELECT * FROM users WHERE provider = $1 AND provider_id = $2 LIMIT 1;', [provider, String(providerId)]);
+    return rowToUser(rows[0]);
+  }
+  return fileDb.users.find(u => u.provider === provider && String(u.providerId) === String(providerId)) || null;
+}
+
+async function getUserById(id) {
+  if (USE_DB) {
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1 LIMIT 1;', [id]);
+    return rowToUser(rows[0]);
+  }
+  return fileDb.users.find(u => String(u.id) === String(id)) || null;
+}
+
+async function createUser({ email = null, passwordHash = null, provider = 'local', providerId = null, displayName = '' }) {
+  const mail = email ? email.trim().toLowerCase() : null;
+  if (USE_DB) {
+    const { rows } = await pool.query(
+      `INSERT INTO users (email, password_hash, provider, provider_id, display_name)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *;`,
+      [mail, passwordHash, provider, providerId ? String(providerId) : null, displayName || '']
+    );
+    return rowToUser(rows[0]);
+  }
+  const user = {
+    id: (fileDb.users.reduce((m, u) => Math.max(m, u.id), 0) || 0) + 1,
+    email: mail, passwordHash, provider, providerId: providerId ? String(providerId) : null,
+    displayName: displayName || '', createdAt: new Date().toISOString()
+  };
+  fileDb.users.push(user);
+  writeFileDb();
+  return user;
+}
+
+// ---- 사용자별 일기 조회/저장 ----
+async function loadData(userId) {
+  if (USE_DB) {
+    const { rows } = await pool.query('SELECT baby_name, baby_gender, entries FROM diaries WHERE user_id = $1;', [userId]);
     if (rows.length === 0) return { ...EMPTY_DATA };
     return { babyName: rows[0].baby_name || '', babyGender: rows[0].baby_gender || '', entries: rows[0].entries || {} };
   }
-  const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-  return { ...EMPTY_DATA, ...JSON.parse(raw) };
+  return { ...EMPTY_DATA, ...(fileDb.diaries[userId] || {}) };
 }
 
-async function saveDataStore(babyName, babyGender, entries) {
+async function saveDataStore(userId, babyName, babyGender, entries) {
   const name = babyName || '';
   const gender = babyGender || '';
   const items = entries || {};
   if (USE_DB) {
     await pool.query(
-      `UPDATE deartoday_state SET baby_name = $1, baby_gender = $2, entries = $3, updated_at = now() WHERE id = 1;`,
-      [name, gender, JSON.stringify(items)]
+      `INSERT INTO diaries (user_id, baby_name, baby_gender, entries, updated_at)
+       VALUES ($1,$2,$3,$4, now())
+       ON CONFLICT (user_id) DO UPDATE SET baby_name = $2, baby_gender = $3, entries = $4, updated_at = now();`,
+      [userId, name, gender, JSON.stringify(items)]
     );
     return;
   }
-  fs.writeFileSync(DATA_FILE, JSON.stringify({ babyName: name, babyGender: gender, entries: items }, null, 2));
+  fileDb.diaries[userId] = { babyName: name, babyGender: gender, entries: items };
+  writeFileDb();
 }
 
 if (LLM_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
@@ -111,9 +210,51 @@ if (LLM_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
   console.warn('   backend/.env.example 을 backend/.env 로 복사하고 키를 채워넣어줘.\n');
 }
 
+if (JWT_SECRET === 'dev-insecure-secret-change-me') {
+  console.warn('\n⚠️  JWT_SECRET이 설정되지 않아 임시 키로 동작해요. 운영에서는 반드시 .env에 JWT_SECRET을 지정해줘.\n');
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(cookieParser());
+
+// ---- 인증 유틸 ----
+// 로그인 상태는 서명된 JWT를 httpOnly 쿠키에 담아 유지함(자바스크립트로 토큰을 훔칠 수 없음).
+function issueSession(res, user) {
+  const token = jwt.sign({ uid: user.id }, JWT_SECRET, { expiresIn: JWT_TTL });
+  res.cookie(COOKIE_NAME, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: APP_BASE_URL.startsWith('https://'),
+    maxAge: 30 * 24 * 60 * 60 * 1000
+  });
+}
+
+function clearSession(res) {
+  res.clearCookie(COOKIE_NAME, { httpOnly: true, sameSite: 'lax', secure: APP_BASE_URL.startsWith('https://') });
+}
+
+function publicUser(user) {
+  // 비밀번호 해시 등 민감 정보는 빼고 프론트에 내려줌.
+  return { id: user.id, email: user.email, displayName: user.displayName, provider: user.provider };
+}
+
+// 요청 쿠키의 JWT를 검증해 req.userId를 채움. 없거나 유효하지 않으면 401.
+async function requireAuth(req, res, next) {
+  try {
+    const token = req.cookies?.[COOKIE_NAME];
+    if (!token) return res.status(401).json({ error: '로그인이 필요해요.' });
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = await getUserById(payload.uid);
+    if (!user) return res.status(401).json({ error: '로그인이 필요해요.' });
+    req.user = user;
+    req.userId = user.id;
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: '로그인이 필요해요.' });
+  }
+}
 
 // 성별 값('boy'|'girl'|'')을 프롬프트에 넣을 한 줄 안내로 바꿈. 값이 없으면 빈 문자열.
 function genderNote(name, babyGender) {
@@ -417,20 +558,193 @@ async function ensureKoreanDiary(draft, babyName) {
   return stripStrayLatinWords(stripNonKorean(stripLabelPrefix(checked) || draft), babyName);
 }
 
-// ---- 데이터 저장/조회 (다이어리 텍스트, 대화 전부 포함된 하나의 JSON 블롭) ----
-app.get('/api/data', async (req, res) => {
+// ====== 인증(Authentication) 라우트 ======
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// 프론트가 어떤 로그인 버튼을 보여줄지 결정하도록 활성화된 제공자 알려줌.
+app.get('/api/auth/providers', (req, res) => {
+  res.json({ google: GOOGLE_ENABLED, kakao: KAKAO_ENABLED, email: true });
+});
+
+// 현재 로그인한 사용자 (없으면 user: null)
+app.get('/api/auth/me', async (req, res) => {
   try {
-    res.json(await loadData());
+    const token = req.cookies?.[COOKIE_NAME];
+    if (!token) return res.json({ user: null });
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = await getUserById(payload.uid);
+    res.json({ user: user ? publicUser(user) : null });
+  } catch {
+    res.json({ user: null });
+  }
+});
+
+// 이메일 회원가입
+app.post('/api/auth/signup', async (req, res) => {
+  try {
+    const email = (req.body?.email || '').trim().toLowerCase();
+    const password = req.body?.password || '';
+    const displayName = (req.body?.displayName || '').trim();
+    if (!EMAIL_RE.test(email)) return res.status(400).json({ error: '이메일 형식이 올바르지 않아요.' });
+    if (password.length < 6) return res.status(400).json({ error: '비밀번호는 6자 이상이어야 해요.' });
+    if (await findUserByEmail(email)) return res.status(409).json({ error: '이미 가입된 이메일이에요.' });
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await createUser({ email, passwordHash, provider: 'local', displayName: displayName || email.split('@')[0] });
+    issueSession(res, user);
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: '가입에 실패했어요.' });
+  }
+});
+
+// 이메일 로그인
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const email = (req.body?.email || '').trim().toLowerCase();
+    const password = req.body?.password || '';
+    const user = await findUserByEmail(email);
+    if (!user || !user.passwordHash) return res.status(401).json({ error: '이메일 또는 비밀번호가 맞지 않아요.' });
+    const ok = await bcrypt.compare(password, user.passwordHash);
+    if (!ok) return res.status(401).json({ error: '이메일 또는 비밀번호가 맞지 않아요.' });
+    issueSession(res, user);
+    res.json({ user: publicUser(user) });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: '로그인에 실패했어요.' });
+  }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  clearSession(res);
+  res.json({ ok: true });
+});
+
+// 소셜 로그인으로 들어온 사용자를 찾거나 새로 만듦.
+async function upsertOAuthUser(provider, providerId, email, displayName) {
+  const existing = await findUserByProvider(provider, providerId);
+  if (existing) return existing;
+  // 같은 이메일을 쓰는 다른 계정이 이미 있으면 유니크 제약 충돌을 피하려고 이메일 없이 저장.
+  let mail = email || null;
+  if (mail && await findUserByEmail(mail)) mail = null;
+  return createUser({ email: mail, provider, providerId, displayName: displayName || '' });
+}
+
+// CSRF 방지용 state를 만들어 짧은 쿠키에 저장하고, 콜백에서 대조함.
+function setOAuthState(res, name) {
+  const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  res.cookie(`oauth_state_${name}`, state, { httpOnly: true, sameSite: 'lax', maxAge: 10 * 60 * 1000, secure: APP_BASE_URL.startsWith('https://') });
+  return state;
+}
+function checkOAuthState(req, name) {
+  const expected = req.cookies?.[`oauth_state_${name}`];
+  return expected && req.query.state && expected === req.query.state;
+}
+
+// ---- 구글 OAuth ----
+app.get('/api/auth/google', (req, res) => {
+  if (!GOOGLE_ENABLED) return res.status(404).send('구글 로그인이 설정되지 않았어요.');
+  const state = setOAuthState(res, 'google');
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: `${APP_BASE_URL}/api/auth/google/callback`,
+    response_type: 'code',
+    scope: 'openid email profile',
+    state
+  });
+  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+  try {
+    if (!GOOGLE_ENABLED) return res.redirect('/?auth_error=google');
+    if (!checkOAuthState(req, 'google')) return res.redirect('/?auth_error=state');
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: req.query.code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: `${APP_BASE_URL}/api/auth/google/callback`,
+        grant_type: 'authorization_code'
+      })
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) throw new Error('구글 토큰 교환 실패');
+    const infoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
+    });
+    const info = await infoRes.json();
+    const user = await upsertOAuthUser('google', info.id, info.email, info.name);
+    issueSession(res, user);
+    res.redirect('/');
+  } catch (e) {
+    console.error('구글 로그인 오류', e);
+    res.redirect('/?auth_error=google');
+  }
+});
+
+// ---- 카카오 OAuth ----
+app.get('/api/auth/kakao', (req, res) => {
+  if (!KAKAO_ENABLED) return res.status(404).send('카카오 로그인이 설정되지 않았어요.');
+  const state = setOAuthState(res, 'kakao');
+  const params = new URLSearchParams({
+    client_id: KAKAO_REST_API_KEY,
+    redirect_uri: `${APP_BASE_URL}/api/auth/kakao/callback`,
+    response_type: 'code',
+    state
+  });
+  res.redirect(`https://kauth.kakao.com/oauth/authorize?${params}`);
+});
+
+app.get('/api/auth/kakao/callback', async (req, res) => {
+  try {
+    if (!KAKAO_ENABLED) return res.redirect('/?auth_error=kakao');
+    if (!checkOAuthState(req, 'kakao')) return res.redirect('/?auth_error=state');
+    const body = {
+      grant_type: 'authorization_code',
+      client_id: KAKAO_REST_API_KEY,
+      redirect_uri: `${APP_BASE_URL}/api/auth/kakao/callback`,
+      code: req.query.code
+    };
+    if (KAKAO_CLIENT_SECRET) body.client_secret = KAKAO_CLIENT_SECRET;
+    const tokenRes = await fetch('https://kauth.kakao.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body)
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) throw new Error('카카오 토큰 교환 실패');
+    const infoRes = await fetch('https://kapi.kakao.com/v2/user/me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
+    });
+    const info = await infoRes.json();
+    const account = info.kakao_account || {};
+    const displayName = account.profile?.nickname || '카카오 사용자';
+    const user = await upsertOAuthUser('kakao', info.id, account.email, displayName);
+    issueSession(res, user);
+    res.redirect('/');
+  } catch (e) {
+    console.error('카카오 로그인 오류', e);
+    res.redirect('/?auth_error=kakao');
+  }
+});
+
+// ---- 데이터 저장/조회 (로그인한 사용자 본인의 일기만) ----
+app.get('/api/data', requireAuth, async (req, res) => {
+  try {
+    res.json(await loadData(req.userId));
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: '데이터를 불러오지 못했어요.' });
   }
 });
 
-app.post('/api/data', async (req, res) => {
+app.post('/api/data', requireAuth, async (req, res) => {
   try {
     const { babyName, babyGender, entries } = req.body || {};
-    await saveDataStore(babyName, babyGender, entries);
+    await saveDataStore(req.userId, babyName, babyGender, entries);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -439,7 +753,7 @@ app.post('/api/data', async (req, res) => {
 });
 
 // ---- 채팅 답장 ----
-app.post('/api/chat', async (req, res) => {
+app.post('/api/chat', requireAuth, async (req, res) => {
   try {
     const { babyName, babyGender, messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -455,7 +769,7 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // ---- 일기(편지) 생성 ----
-app.post('/api/diary', async (req, res) => {
+app.post('/api/diary', requireAuth, async (req, res) => {
   try {
     const { babyName, babyGender, content } = req.body || {};
     if (!content) return res.status(400).json({ error: 'content가 비어있어요.' });

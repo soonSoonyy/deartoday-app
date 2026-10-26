@@ -96,6 +96,31 @@ npm run dev
 
 > 로컬 개발에서는 `DATABASE_URL` 을 설정하지 않으면 예전처럼 `backend/data/diary-data.json` 파일에 저장돼요. DB 없이도 그대로 돌아가요.
 
+## 로그인 (사용자별 데이터 분리)
+
+로그인은 세 가지 방식을 지원해요: **이메일/비밀번호, 구글, 카카오.** 로그인한 계정별로 일기가 완전히 분리되어, 다른 사람은 내 일기를 볼 수 없어요. (서버가 켜질 때 `users`·`diaries` 테이블을 자동 생성해요.)
+
+### 공통 (필수)
+
+- `JWT_SECRET`: 로그인 세션 서명 키. 긴 임의 문자열로 지정해요. (예: `openssl rand -hex 32`. Render에서는 자동 생성됨)
+- `APP_BASE_URL`: 앱의 공개 주소. 로컬은 `http://localhost:4000`, 배포는 `https://<렌더주소>.onrender.com`. (OAuth 콜백 주소를 만드는 데 쓰여요)
+
+**이메일 로그인은 위 두 개만 있으면 바로 동작해요.** 구글/카카오는 각 콘솔에서 앱을 등록하고 키를 넣어야 버튼이 활성화돼요.
+
+### 구글 로그인
+
+1. [Google Cloud Console](https://console.cloud.google.com) → API 및 서비스 → 사용자 인증 정보 → **OAuth 2.0 클라이언트 ID** 생성 (웹 애플리케이션)
+2. **승인된 리디렉션 URI** 에 추가: `<APP_BASE_URL>/api/auth/google/callback`
+3. 발급된 값을 환경변수에 넣기: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+
+### 카카오 로그인
+
+1. [Kakao Developers](https://developers.kakao.com) → 내 애플리케이션 → 앱 생성
+2. **제품 설정 → 카카오 로그인** 활성화, **Redirect URI** 에 추가: `<APP_BASE_URL>/api/auth/kakao/callback`
+3. **앱 키 → REST API 키** 를 `KAKAO_REST_API_KEY` 에 넣기 (보안 강화용 Client Secret은 선택: `KAKAO_CLIENT_SECRET`)
+
+> 구글/카카오 키를 넣지 않으면 로그인 화면에서 해당 버튼만 비활성 안내가 뜨고, 이메일 로그인은 정상 동작해요.
+
 ## 프로덕션으로 가기 전에 고려할 것
 
 이 스캐폴드는 로컬 실행 기준의 프로토타입이에요. 실제 서비스로 배포하려면:

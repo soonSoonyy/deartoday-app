@@ -29,3 +29,21 @@ services:
       # Supabase → Project Settings → Database → Connection string(URI)에서 복사.
       - key: DATABASE_URL
         sync: false
+      # --- 로그인/인증 ---
+      # JWT 서명 키(필수). 긴 임의 문자열. generateValue로 Render가 자동 생성하게 함.
+      - key: JWT_SECRET
+        generateValue: true
+      # OAuth 콜백에 쓰이는 앱의 공개 주소. 배포 후 생긴 Render 주소로 설정.
+      # 예: https://deartoday-xxxx.onrender.com
+      - key: APP_BASE_URL
+        sync: false
+      # 구글 로그인 (안 넣으면 구글 버튼 비활성). 리디렉션 URI: <APP_BASE_URL>/api/auth/google/callback
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      # 카카오 로그인 (안 넣으면 카카오 버튼 비활성). Redirect URI: <APP_BASE_URL>/api/auth/kakao/callback
+      - key: KAKAO_REST_API_KEY
+        sync: false
+      - key: KAKAO_CLIENT_SECRET
+        sync: false
