@@ -1,0 +1,8 @@
+# Docker 빌드에서 제외 (이미지 가볍게 + 빌드 캐시 안정화)
+**/node_modules
+backend/data
+backend/.env
+frontend/dist
+.git
+.gitignore
+*.md
