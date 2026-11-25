@@ -60,7 +60,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 // 문자 오염을 걸러내는 결정적 필터(stripNonKorean 등)는 모드와 무관하게 항상 동작함.
 const FAST_MODE = !/^(0|false|no)$/i.test(process.env.FAST_MODE || '');
 
-const EMPTY_DATA = { babyName: '', babyGender: '', tone: 'plain', customTone: '', entries: {} };
+const EMPTY_DATA = { babyName: '', babyGender: '', tone: 'plain', customTone: '', letterLength: 'medium', entries: {} };
 
 // ---- 저장소 계층: 사용자(users) + 사용자별 일기(diaries) ----
 // DB 모드(Postgres/Supabase)와 파일 모드(JSON) 둘 다 지원함.
@@ -113,6 +113,7 @@ async function initStorage() {
         baby_gender TEXT NOT NULL DEFAULT '',
         tone TEXT NOT NULL DEFAULT 'plain',
         custom_tone TEXT NOT NULL DEFAULT '',
+        letter_length TEXT NOT NULL DEFAULT 'medium',
         entries JSONB NOT NULL DEFAULT '{}'::jsonb,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
@@ -120,6 +121,7 @@ async function initStorage() {
     // 기존 테이블(말투 컬럼 없이 만들어진 경우)에도 안전하게 컬럼 추가.
     await pool.query(`ALTER TABLE diaries ADD COLUMN IF NOT EXISTS tone TEXT NOT NULL DEFAULT 'plain';`);
     await pool.query(`ALTER TABLE diaries ADD COLUMN IF NOT EXISTS custom_tone TEXT NOT NULL DEFAULT '';`);
+    await pool.query(`ALTER TABLE diaries ADD COLUMN IF NOT EXISTS letter_length TEXT NOT NULL DEFAULT 'medium';`);
     console.log('✅ 저장소: Postgres(DB) 연결됨 — 계정/일기가 사용자별로 영구 보존돼요.');
   } else {
     if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -188,29 +190,30 @@ async function createUser({ email = null, passwordHash = null, provider = 'local
 // ---- 사용자별 일기 조회/저장 ----
 async function loadData(userId) {
   if (USE_DB) {
-    const { rows } = await pool.query('SELECT baby_name, baby_gender, tone, custom_tone, entries FROM diaries WHERE user_id = $1;', [userId]);
+    const { rows } = await pool.query('SELECT baby_name, baby_gender, tone, custom_tone, letter_length, entries FROM diaries WHERE user_id = $1;', [userId]);
     if (rows.length === 0) return { ...EMPTY_DATA };
-    return { babyName: rows[0].baby_name || '', babyGender: rows[0].baby_gender || '', tone: rows[0].tone || 'plain', customTone: rows[0].custom_tone || '', entries: rows[0].entries || {} };
+    return { babyName: rows[0].baby_name || '', babyGender: rows[0].baby_gender || '', tone: rows[0].tone || 'plain', customTone: rows[0].custom_tone || '', letterLength: rows[0].letter_length || 'medium', entries: rows[0].entries || {} };
   }
   return { ...EMPTY_DATA, ...(fileDb.diaries[userId] || {}) };
 }
 
-async function saveDataStore(userId, babyName, babyGender, tone, customTone, entries) {
+async function saveDataStore(userId, babyName, babyGender, tone, customTone, letterLength, entries) {
   const name = babyName || '';
   const gender = babyGender || '';
   const toneVal = tone || 'plain';
   const customVal = customTone || '';
+  const lenVal = letterLength || 'medium';
   const items = entries || {};
   if (USE_DB) {
     await pool.query(
-      `INSERT INTO diaries (user_id, baby_name, baby_gender, tone, custom_tone, entries, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now())
-       ON CONFLICT (user_id) DO UPDATE SET baby_name = $2, baby_gender = $3, tone = $4, custom_tone = $5, entries = $6, updated_at = now();`,
-      [userId, name, gender, toneVal, customVal, JSON.stringify(items)]
+      `INSERT INTO diaries (user_id, baby_name, baby_gender, tone, custom_tone, letter_length, entries, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+       ON CONFLICT (user_id) DO UPDATE SET baby_name = $2, baby_gender = $3, tone = $4, custom_tone = $5, letter_length = $6, entries = $7, updated_at = now();`,
+      [userId, name, gender, toneVal, customVal, lenVal, JSON.stringify(items)]
     );
     return;
   }
-  fileDb.diaries[userId] = { babyName: name, babyGender: gender, tone: toneVal, customTone: customVal, entries: items };
+  fileDb.diaries[userId] = { babyName: name, babyGender: gender, tone: toneVal, customTone: customVal, letterLength: lenVal, entries: items };
   writeFileDb();
 }
 
@@ -359,8 +362,17 @@ ${toneInstruction(tone, customTone, 'chat')}
 - 부모가 주어를 생략하고 말하면(예: "오늘 신나게 놀았어"), 문맥상 명백히 부모 얘기가 아닌 이상 그 문장의 주어를 ${name}로 우선 이해하고 반응해`;
 }
 
-function diarySystemPrompt(babyName, babyGender, tone, customTone) {
+// 편지 길이 설정에 따른 분량 안내.
+const LETTER_LENGTH_GUIDE = {
+  short: '200자 내외로 짧고 간결하게',
+  medium: '400자 내외로',
+  long: '700자 내외로 충분히 길고 풍성하게'
+};
+const LETTER_LENGTH_VALUES = Object.keys(LETTER_LENGTH_GUIDE);
+
+function diarySystemPrompt(babyName, babyGender, tone, customTone, letterLength) {
   const name = babyName || '아가';
+  const lengthGuide = LETTER_LENGTH_GUIDE[letterLength] || LETTER_LENGTH_GUIDE.medium;
   return `다음은 부모와 나눈, 오늘 하루 ${name}에 대한 대화 내용이야. 이 내용을 바탕으로 엄마가 ${name}에게 쓰는 편지 형식의 하루 일기를 작성해줘.${genderNote(name, babyGender)}
 
 규칙:
@@ -372,7 +384,7 @@ function diarySystemPrompt(babyName, babyGender, tone, customTone) {
 ${toneInstruction(tone, customTone, 'diary')}
 - 욕설, 비속어, 거친 표현은 절대 쓰지 말 것
 - "죽는다", "때린다" 같은 폭력적·과격한 표현은 절대 쓰지 말 것
-- 400자 내외로 작성할 것
+- ${lengthGuide} 작성할 것
 - 마지막 줄은 "사랑을 담아, 엄마가"로 끝맺을 것
 - 다른 설명이나 코멘트 없이 편지 본문만 출력할 것`;
 }
@@ -868,14 +880,15 @@ app.get('/api/data', requireAuth, async (req, res) => {
 
 app.post('/api/data', requireAuth, async (req, res) => {
   try {
-    const { babyName, babyGender, tone, customTone, entries } = req.body || {};
+    const { babyName, babyGender, tone, customTone, letterLength, entries } = req.body || {};
     // 허용된 값만 저장(임의 값 주입 방지).
     const safeGender = ['boy', 'girl', ''].includes(babyGender) ? babyGender : '';
     const safeTone = TONE_VALUES.includes(tone) ? tone : 'plain';
+    const safeLength = LETTER_LENGTH_VALUES.includes(letterLength) ? letterLength : 'medium';
     const safeName = typeof babyName === 'string' ? babyName.slice(0, 40) : '';
     // 직접 입력 말투: 길이 제한 + 줄바꿈 제거(프롬프트 구조 보호).
     const safeCustom = typeof customTone === 'string' ? customTone.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
-    await saveDataStore(req.userId, safeName, safeGender, safeTone, safeCustom, entries);
+    await saveDataStore(req.userId, safeName, safeGender, safeTone, safeCustom, safeLength, entries);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -902,9 +915,9 @@ app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
 // ---- 일기(편지) 생성 ----
 app.post('/api/diary', requireAuth, aiLimiter, async (req, res) => {
   try {
-    const { babyName, babyGender, tone, customTone, content } = req.body || {};
+    const { babyName, babyGender, tone, customTone, letterLength, content } = req.body || {};
     if (!content) return res.status(400).json({ error: 'content가 비어있어요.' });
-    const draft = await callModelKorean(diarySystemPrompt(babyName, babyGender, tone, customTone), [{ role: 'user', content }], { babyName });
+    const draft = await callModelKorean(diarySystemPrompt(babyName, babyGender, tone, customTone, letterLength), [{ role: 'user', content }], { babyName });
     const diaryText = await ensureKoreanDiary(draft, babyName);
     res.json({ diaryText });
   } catch (e) {

@@ -30,6 +30,13 @@ const TONE_OPTIONS = [
   { value: 'brief', label: '간결', desc: '짧고 간결하게', example: '공원 다녀왔구나. 좋았겠다.' }
 ];
 
+// 편지 길이 선택지. 편지(일기) 분량에만 적용됨.
+const LENGTH_OPTIONS = [
+  { value: 'short', label: '짧게', desc: '200자 내외' },
+  { value: 'medium', label: '보통', desc: '400자 내외' },
+  { value: 'long', label: '길게', desc: '700자 내외' }
+];
+
 function pad(n) { return String(n).padStart(2, '0'); }
 function formatKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function parseKey(key) {
@@ -91,11 +98,11 @@ async function fetchData() {
   return res.json();
 }
 
-async function saveData(babyName, babyGender, tone, customTone, entries) {
+async function saveData(babyName, babyGender, tone, customTone, letterLength, entries) {
   const res = await fetch('/api/data', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, tone, customTone, entries })
+    body: JSON.stringify({ babyName, babyGender, tone, customTone, letterLength, entries })
   });
   if (!res.ok) throw new Error('데이터를 저장하지 못했어요.');
   return res.json();
@@ -112,11 +119,11 @@ async function requestChatReply(babyName, babyGender, tone, customTone, messages
   return data.reply;
 }
 
-async function requestDiary(babyName, babyGender, tone, customTone, content) {
+async function requestDiary(babyName, babyGender, tone, customTone, letterLength, content) {
   const res = await fetch('/api/diary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, tone, customTone, content })
+    body: JSON.stringify({ babyName, babyGender, tone, customTone, letterLength, content })
   });
   if (!res.ok) throw new Error('일기를 완성하지 못했어요.');
   const data = await res.json();
@@ -172,7 +179,7 @@ export default function App() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [user, setUser] = useState(null);
   const [providers, setProviders] = useState({ google: false, kakao: false, email: true });
-  const [data, setData] = useState({ babyName: '', babyGender: '', tone: 'plain', customTone: '', entries: {} });
+  const [data, setData] = useState({ babyName: '', babyGender: '', tone: 'plain', customTone: '', letterLength: 'medium', entries: {} });
   const [view, setView] = useState('chat');
   const [nameInput, setNameInput] = useState('');
   const [editingName, setEditingName] = useState(false);
@@ -205,7 +212,7 @@ export default function App() {
       if (me) {
         try {
           const parsed = await fetchData();
-          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', customTone: parsed.customTone || '', entries: parsed.entries || {} });
+          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', customTone: parsed.customTone || '', letterLength: parsed.letterLength || 'medium', entries: parsed.entries || {} });
         } catch (e) {
           console.error(e);
         }
@@ -220,7 +227,7 @@ export default function App() {
     setUser(u);
     try {
       const parsed = await fetchData();
-      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', customTone: parsed.customTone || '', entries: parsed.entries || {} });
+      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', customTone: parsed.customTone || '', letterLength: parsed.letterLength || 'medium', entries: parsed.entries || {} });
     } catch (e) {
       console.error(e);
     }
@@ -230,7 +237,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     try { await logout(); } catch (e) { console.error(e); }
     setUser(null);
-    setData({ babyName: '', babyGender: '', tone: 'plain', customTone: '', entries: {} });
+    setData({ babyName: '', babyGender: '', tone: 'plain', customTone: '', letterLength: 'medium', entries: {} });
     setView('chat');
     setShowPrivacy(false);
     setOnboardStep('name');
@@ -241,7 +248,7 @@ export default function App() {
   const persist = useCallback(async (next) => {
     setData(next);
     try {
-      await saveData(next.babyName, next.babyGender, next.tone, next.customTone, next.entries);
+      await saveData(next.babyName, next.babyGender, next.tone, next.customTone, next.letterLength, next.entries);
     } catch (e) {
       console.error('저장 실패', e);
     }
@@ -312,6 +319,11 @@ export default function App() {
     if (v !== (data.customTone || '')) persist({ ...data, customTone: v });
   };
 
+  // 편지 길이 선택.
+  const setLetterLength = (letterLength) => {
+    persist({ ...data, letterLength });
+  };
+
   const handleRenameSubmit = () => {
     const name = nameInput.trim();
     if (!name) { setEditingName(false); return; }
@@ -364,7 +376,7 @@ export default function App() {
         const who = m.role === 'user' ? '부모: ' : '친구: ';
         return who + (m.content || '');
       }).join('\n');
-      const diaryText = await requestDiary(data.babyName, data.babyGender, data.tone, data.customTone, transcript);
+      const diaryText = await requestDiary(data.babyName, data.babyGender, data.tone, data.customTone, data.letterLength, transcript);
       const next = { ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, diaryText, createdAt: new Date().toISOString() } } };
       await persist(next);
     } catch (e) {
@@ -687,6 +699,21 @@ export default function App() {
                     maxLength={200}
                   />
                   <p className="pd-tone-custom-hint">직접 적으면 위 선택보다 우선 적용돼요. 비우면 선택한 말투로 돌아가요.</p>
+                </div>
+              </div>
+              <div className="pd-tone-setting">
+                <p className="pd-tone-label">편지 길이</p>
+                <div className="pd-tone-options">
+                  {LENGTH_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      className={`pd-tone-option ${(data.letterLength || 'medium') === opt.value ? 'selected' : ''}`}
+                      onClick={() => setLetterLength(opt.value)}
+                    >
+                      <span className="pd-tone-option-name">{opt.label}</span>
+                      <span className="pd-tone-option-desc">{opt.desc}</span>
+                    </button>
+                  ))}
                 </div>
               </div>
               <ul className="pd-privacy-text">
