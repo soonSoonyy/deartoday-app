@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Heart, Calendar as CalendarIcon, MessageCircle, Send,
   ChevronLeft, ChevronRight, X, Moon, Loader2, Pencil, Sparkles,
-  ShieldCheck, Trash2, RotateCcw
+  Settings, Trash2
 } from 'lucide-react';
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -496,7 +496,7 @@ export default function App() {
           <div className="pd-header-right">
             <div className="pd-header-date">{formatNice(today)}</div>
             <button className="pd-privacy-btn" onClick={() => setShowPrivacy(true)}>
-              <ShieldCheck size={12} /> 개인정보
+              <Settings size={12} /> 설정
             </button>
           </div>
         </header>
@@ -625,8 +625,8 @@ export default function App() {
           <div className="pd-modal" onClick={e => e.stopPropagation()}>
             <button className="pd-modal-close" onClick={() => { setShowPrivacy(false); setConfirmDelete(false); }}><X size={16} /></button>
             <div className="pd-privacy-panel">
-              <div className="pd-privacy-icon"><ShieldCheck size={20} /></div>
-              <h2 className="pd-privacy-title">개인정보 안내</h2>
+              <div className="pd-privacy-icon"><Settings size={20} /></div>
+              <h2 className="pd-privacy-title">설정</h2>
               {user && (
                 <div className="pd-account-row">
                   <span className="pd-account-info">
@@ -675,23 +675,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-
-              <div className="pd-privacy-testing">
-                <p className="pd-privacy-testing-label">테스트용</p>
-                {!confirmReset ? (
-                  <button className="pd-btn-danger" onClick={() => setConfirmReset(true)}>
-                    <RotateCcw size={13} /> 처음 화면으로 초기화
-                  </button>
-                ) : (
-                  <div className="pd-privacy-confirm">
-                    <p>아기 이름과 모든 일기를 지우고 처음 화면으로 돌아갈까요?</p>
-                    <div className="pd-privacy-actions">
-                      <button className="pd-btn-secondary" onClick={() => setConfirmReset(false)}>취소</button>
-                      <button className="pd-btn-danger" onClick={resetAppForTesting}>초기화할게요</button>
-                    </div>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         </div>
