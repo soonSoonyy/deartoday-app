@@ -8,6 +8,7 @@ import pg from 'pg';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import cookieParser from 'cookie-parser';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
@@ -24,7 +25,8 @@ const USE_DB = !!DATABASE_URL;
 // ---- 인증 관련 설정 ----
 // JWT 서명 키. 운영에서는 반드시 환경변수로 지정해야 하고, 없으면 임시 키로 동작하되 경고함.
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-insecure-secret-change-me';
-const JWT_TTL = '30d'; // 로그인 유지 기간
+const JWT_TTL = '14d'; // 로그인 유지 기간 (민감 데이터라 과도하게 길지 않게)
+const SESSION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 const COOKIE_NAME = 'deartoday_token';
 // OAuth 콜백 주소를 만들 때 쓰는 앱의 공개 베이스 URL (예: https://deartoday-xxx.onrender.com).
 // 로컬에서는 http://localhost:4000. 뒤 슬래시는 떼서 보관.
@@ -221,13 +223,41 @@ if (LLM_PROVIDER === 'claude' && !ANTHROPIC_API_KEY) {
 }
 
 if (JWT_SECRET === 'dev-insecure-secret-change-me') {
-  console.warn('\n⚠️  JWT_SECRET이 설정되지 않아 임시 키로 동작해요. 운영에서는 반드시 .env에 JWT_SECRET을 지정해줘.\n');
+  if (process.env.NODE_ENV === 'production') {
+    // 운영 환경에서 기본(공개된) 키로 뜨면 세션 위조로 남의 데이터에 접근 가능 → 아예 기동 중단.
+    console.error('\n❌ 보안: 운영 환경에서는 JWT_SECRET을 반드시 설정해야 해요. 서버를 시작하지 않습니다.');
+    console.error('   긴 임의 문자열로 지정해줘. 예) openssl rand -hex 32\n');
+    process.exit(1);
+  }
+  console.warn('\n⚠️  JWT_SECRET이 설정되지 않아 임시 키로 동작해요(개발용). 운영에서는 반드시 지정해줘.\n');
 }
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+// Fly/Render 같은 리버스 프록시 뒤에서 실제 클라이언트 IP를 얻기 위함(레이트리밋이 IP 기준).
+app.set('trust proxy', 1);
+// 앱은 같은 출처(백엔드가 프론트까지 서빙)로 동작하므로 CORS를 앱 주소로만 허용.
+app.use(cors({ origin: APP_BASE_URL, credentials: true }));
+// 요청 본문 크기 제한(대용량 요청으로 인한 서비스 거부 방지).
+app.use(express.json({ limit: '2mb' }));
 app.use(cookieParser());
+
+// ---- 레이트리밋(무차별 대입/남용 방지) ----
+// 로그인·가입: IP당 15분에 20회로 제한해 비밀번호 무차별 대입을 막음.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '시도가 너무 많아요. 잠시 후 다시 시도해주세요.' }
+});
+// AI 호출: 비용이 드는 엔드포인트라 IP당 1분에 20회로 제한.
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '요청이 너무 많아요. 잠시 후 다시 시도해주세요.' }
+});
 
 // ---- 인증 유틸 ----
 // 로그인 상태는 서명된 JWT를 httpOnly 쿠키에 담아 유지함(자바스크립트로 토큰을 훔칠 수 없음).
@@ -237,7 +267,7 @@ function issueSession(res, user) {
     httpOnly: true,
     sameSite: 'lax',
     secure: APP_BASE_URL.startsWith('https://'),
-    maxAge: 30 * 24 * 60 * 60 * 1000
+    maxAge: SESSION_MAX_AGE_MS
   });
 }
 
@@ -655,13 +685,13 @@ app.get('/api/auth/me', async (req, res) => {
 });
 
 // 이메일 회원가입
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', authLimiter, async (req, res) => {
   try {
     const email = (req.body?.email || '').trim().toLowerCase();
     const password = req.body?.password || '';
     const displayName = (req.body?.displayName || '').trim();
     if (!EMAIL_RE.test(email)) return res.status(400).json({ error: '이메일 형식이 올바르지 않아요.' });
-    if (password.length < 6) return res.status(400).json({ error: '비밀번호는 6자 이상이어야 해요.' });
+    if (password.length < 8) return res.status(400).json({ error: '비밀번호는 8자 이상이어야 해요.' });
     if (await findUserByEmail(email)) return res.status(409).json({ error: '이미 가입된 이메일이에요.' });
     const passwordHash = await bcrypt.hash(password, 10);
     const user = await createUser({ email, passwordHash, provider: 'local', displayName: displayName || email.split('@')[0] });
@@ -674,7 +704,7 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 // 이메일 로그인
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const email = (req.body?.email || '').trim().toLowerCase();
     const password = req.body?.password || '';
@@ -819,7 +849,11 @@ app.get('/api/data', requireAuth, async (req, res) => {
 app.post('/api/data', requireAuth, async (req, res) => {
   try {
     const { babyName, babyGender, tone, entries } = req.body || {};
-    await saveDataStore(req.userId, babyName, babyGender, tone, entries);
+    // 허용된 값만 저장(임의 값 주입 방지).
+    const safeGender = ['boy', 'girl', ''].includes(babyGender) ? babyGender : '';
+    const safeTone = ['plain', 'warm', 'playful'].includes(tone) ? tone : 'plain';
+    const safeName = typeof babyName === 'string' ? babyName.slice(0, 40) : '';
+    await saveDataStore(req.userId, safeName, safeGender, safeTone, entries);
     res.json({ ok: true });
   } catch (e) {
     console.error(e);
@@ -828,7 +862,7 @@ app.post('/api/data', requireAuth, async (req, res) => {
 });
 
 // ---- 채팅 답장 ----
-app.post('/api/chat', requireAuth, async (req, res) => {
+app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
     const { babyName, babyGender, tone, messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
@@ -838,13 +872,13 @@ app.post('/api/chat', requireAuth, async (req, res) => {
     const reply = await naturalizeReply(draft, messages, babyName);
     res.json({ reply });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
+    console.error(e); // 내부 오류는 로그에만 남기고, 사용자에겐 일반 메시지만.
+    res.status(500).json({ error: '지금은 답장을 받아올 수 없어요. 잠시 후 다시 시도해주세요.' });
   }
 });
 
 // ---- 일기(편지) 생성 ----
-app.post('/api/diary', requireAuth, async (req, res) => {
+app.post('/api/diary', requireAuth, aiLimiter, async (req, res) => {
   try {
     const { babyName, babyGender, tone, content } = req.body || {};
     if (!content) return res.status(400).json({ error: 'content가 비어있어요.' });
@@ -852,8 +886,8 @@ app.post('/api/diary', requireAuth, async (req, res) => {
     const diaryText = await ensureKoreanDiary(draft, babyName);
     res.json({ diaryText });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
+    console.error(e); // 내부 오류는 로그에만 남기고, 사용자에겐 일반 메시지만.
+    res.status(500).json({ error: '지금은 편지를 완성할 수 없어요. 잠시 후 다시 시도해주세요.' });
   }
 });
 

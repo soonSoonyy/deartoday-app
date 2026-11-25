@@ -741,7 +741,7 @@ function AuthScreen({ providers, onAuthed }) {
             <button className={`pd-auth-tab ${mode === 'signup' ? 'active' : ''}`} onClick={() => { setMode('signup'); setError(''); }}>회원가입</button>
           </div>
           <input className="pd-input" type="email" autoComplete="email" placeholder="이메일" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={onEnter} />
-          <input className="pd-input" type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder="비밀번호 (6자 이상)" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={onEnter} />
+          <input className="pd-input" type="password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} placeholder="비밀번호 (8자 이상)" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={onEnter} />
           {mode === 'signup' && (
             <input className="pd-input" placeholder="닉네임 (선택)" value={displayName} onChange={e => setDisplayName(e.target.value)} onKeyDown={onEnter} />
           )}
