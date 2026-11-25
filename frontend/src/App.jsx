@@ -20,11 +20,11 @@ function nextGender(g) {
   return 'boy';
 }
 
-// 말투 선택지 (대화·편지의 톤). 기본은 'plain'(담백).
+// 말투 선택지 (대화·편지의 톤). 기본은 'plain'(담백). example은 선택 시 보여줄 말투 미리보기.
 const TONE_OPTIONS = [
-  { value: 'plain', label: '담백', desc: '담담하고 편안하게' },
-  { value: 'warm', label: '다정', desc: '포근하고 감정 풍부하게' },
-  { value: 'playful', label: '유쾌', desc: '장난기 있고 생기 있게' }
+  { value: 'plain', label: '담백', desc: '담담하고 편안하게', example: '오늘 하늘이랑 공원 다녀왔구나. 날씨도 좋았겠다.' },
+  { value: 'warm', label: '다정', desc: '포근하고 다정하게', example: '공원이라니 생각만 해도 포근하다. 하늘이도, 엄마도 참 좋은 하루였겠네.' },
+  { value: 'playful', label: '유쾌', desc: '장난기 있고 생기 있게', example: '오 공원 나들이! 하늘이 완전 신났겠는데? 오늘의 미니 소풍이었네 ㅎㅎ' }
 ];
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -650,12 +650,17 @@ export default function App() {
                     </button>
                   ))}
                 </div>
+                <div className="pd-tone-example">
+                  <span className="pd-tone-example-label">예시</span>
+                  <p className="pd-tone-example-text">
+                    {(TONE_OPTIONS.find(o => o.value === (data.tone || 'plain')) || TONE_OPTIONS[0]).example}
+                  </p>
+                </div>
               </div>
               <ul className="pd-privacy-text">
-                <li>AI API 키는 백엔드 서버에만 저장돼. 브라우저(프론트엔드)로는 절대 전달되지 않아.</li>
-                <li>대화·일기는 로그인한 계정별로 분리되어 저장돼. 다른 사람은 네 일기를 볼 수 없어.</li>
-                <li>일기를 쓰기 위해 대화 내용이 서버를 거쳐 AI 모델로 전송돼. 민감한 정보는 되도록 적게 남기는 걸 추천해.</li>
-                <li>실제 서비스로 배포할 땐 저장 데이터 암호화, HTTPS 등 접근 제어를 추가하는 걸 추천해.</li>
+                <li>작성하신 대화와 일기는 본인 계정에만 연결되어 안전하게 보관돼요. 다른 분은 볼 수 없어요.</li>
+                <li>일기를 완성할 때 대화 내용이 AI에게 전달돼요. 민감한 정보는 되도록 적게 남기시는 걸 권해드려요.</li>
+                <li>언제든지 아래에서 저장된 일기를 모두 삭제하실 수 있어요.</li>
               </ul>
               {!confirmDelete ? (
                 <button className="pd-btn-danger" onClick={() => setConfirmDelete(true)}>
@@ -663,10 +668,10 @@ export default function App() {
                 </button>
               ) : (
                 <div className="pd-privacy-confirm">
-                  <p>정말 모든 일기와 사진을 삭제할까? 되돌릴 수 없어.</p>
+                  <p>정말 모든 일기를 삭제하시겠어요? 삭제하면 되돌릴 수 없어요.</p>
                   <div className="pd-privacy-actions">
                     <button className="pd-btn-secondary" onClick={() => setConfirmDelete(false)}>취소</button>
-                    <button className="pd-btn-danger" onClick={deleteAllEntries}>삭제할게</button>
+                    <button className="pd-btn-danger" onClick={deleteAllEntries}>삭제할게요</button>
                   </div>
                 </div>
               )}
@@ -675,14 +680,14 @@ export default function App() {
                 <p className="pd-privacy-testing-label">테스트용</p>
                 {!confirmReset ? (
                   <button className="pd-btn-danger" onClick={() => setConfirmReset(true)}>
-                    <RotateCcw size={13} /> 캐시·저장소 전체 초기화 후 처음 화면으로
+                    <RotateCcw size={13} /> 처음 화면으로 초기화
                   </button>
                 ) : (
                   <div className="pd-privacy-confirm">
-                    <p>아기 이름, 모든 일기·사진, 브라우저 저장소까지 전부 지우고 처음 화면으로 돌아갈까?</p>
+                    <p>아기 이름과 모든 일기를 지우고 처음 화면으로 돌아갈까요?</p>
                     <div className="pd-privacy-actions">
                       <button className="pd-btn-secondary" onClick={() => setConfirmReset(false)}>취소</button>
-                      <button className="pd-btn-danger" onClick={resetAppForTesting}>초기화할게</button>
+                      <button className="pd-btn-danger" onClick={resetAppForTesting}>초기화할게요</button>
                     </div>
                   </div>
                 )}
