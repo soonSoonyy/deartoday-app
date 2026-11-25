@@ -20,6 +20,13 @@ function nextGender(g) {
   return 'boy';
 }
 
+// 말투 선택지 (대화·편지의 톤). 기본은 'plain'(담백).
+const TONE_OPTIONS = [
+  { value: 'plain', label: '담백', desc: '담담하고 편안하게' },
+  { value: 'warm', label: '다정', desc: '포근하고 감정 풍부하게' },
+  { value: 'playful', label: '유쾌', desc: '장난기 있고 생기 있게' }
+];
+
 function pad(n) { return String(n).padStart(2, '0'); }
 function formatKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 function parseKey(key) {
@@ -81,32 +88,32 @@ async function fetchData() {
   return res.json();
 }
 
-async function saveData(babyName, babyGender, entries) {
+async function saveData(babyName, babyGender, tone, entries) {
   const res = await fetch('/api/data', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, entries })
+    body: JSON.stringify({ babyName, babyGender, tone, entries })
   });
   if (!res.ok) throw new Error('데이터를 저장하지 못했어요.');
   return res.json();
 }
 
-async function requestChatReply(babyName, babyGender, messages) {
+async function requestChatReply(babyName, babyGender, tone, messages) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, messages })
+    body: JSON.stringify({ babyName, babyGender, tone, messages })
   });
   if (!res.ok) throw new Error('답장을 받아오지 못했어요.');
   const data = await res.json();
   return data.reply;
 }
 
-async function requestDiary(babyName, babyGender, content) {
+async function requestDiary(babyName, babyGender, tone, content) {
   const res = await fetch('/api/diary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, content })
+    body: JSON.stringify({ babyName, babyGender, tone, content })
   });
   if (!res.ok) throw new Error('일기를 완성하지 못했어요.');
   const data = await res.json();
@@ -162,7 +169,7 @@ export default function App() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [user, setUser] = useState(null);
   const [providers, setProviders] = useState({ google: false, kakao: false, email: true });
-  const [data, setData] = useState({ babyName: '', babyGender: '', entries: {} });
+  const [data, setData] = useState({ babyName: '', babyGender: '', tone: 'plain', entries: {} });
   const [view, setView] = useState('chat');
   const [nameInput, setNameInput] = useState('');
   const [editingName, setEditingName] = useState(false);
@@ -194,7 +201,7 @@ export default function App() {
       if (me) {
         try {
           const parsed = await fetchData();
-          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', entries: parsed.entries || {} });
+          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', entries: parsed.entries || {} });
         } catch (e) {
           console.error(e);
         }
@@ -209,7 +216,7 @@ export default function App() {
     setUser(u);
     try {
       const parsed = await fetchData();
-      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', entries: parsed.entries || {} });
+      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', entries: parsed.entries || {} });
     } catch (e) {
       console.error(e);
     }
@@ -219,7 +226,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     try { await logout(); } catch (e) { console.error(e); }
     setUser(null);
-    setData({ babyName: '', babyGender: '', entries: {} });
+    setData({ babyName: '', babyGender: '', tone: 'plain', entries: {} });
     setView('chat');
     setShowPrivacy(false);
     setOnboardStep('name');
@@ -230,7 +237,7 @@ export default function App() {
   const persist = useCallback(async (next) => {
     setData(next);
     try {
-      await saveData(next.babyName, next.babyGender, next.entries);
+      await saveData(next.babyName, next.babyGender, next.tone, next.entries);
     } catch (e) {
       console.error('저장 실패', e);
     }
@@ -287,6 +294,11 @@ export default function App() {
     persist({ ...data, babyGender: nextGender(data.babyGender) });
   };
 
+  // 말투(담백/다정/유쾌) 선택 — 설정 패널에서 바꿈.
+  const setTone = (tone) => {
+    persist({ ...data, tone });
+  };
+
   const handleRenameSubmit = () => {
     const name = nameInput.trim();
     if (!name) { setEditingName(false); return; }
@@ -319,7 +331,7 @@ export default function App() {
     setSending(true);
     try {
       const apiMessages = buildApiMessages(msgs);
-      const reply = await requestChatReply(data.babyName, data.babyGender, apiMessages);
+      const reply = await requestChatReply(data.babyName, data.babyGender, data.tone, apiMessages);
       const withReply = [...msgs, { role: 'assistant', content: reply || '...' }];
       await persist({ ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: withReply } } });
     } catch (e) {
@@ -339,7 +351,7 @@ export default function App() {
         const who = m.role === 'user' ? '부모: ' : '친구: ';
         return who + (m.content || '');
       }).join('\n');
-      const diaryText = await requestDiary(data.babyName, data.babyGender, transcript);
+      const diaryText = await requestDiary(data.babyName, data.babyGender, data.tone, transcript);
       const next = { ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, diaryText, createdAt: new Date().toISOString() } } };
       await persist(next);
     } catch (e) {
@@ -624,6 +636,21 @@ export default function App() {
                   <button className="pd-logout-btn" onClick={handleLogout}>로그아웃</button>
                 </div>
               )}
+              <div className="pd-tone-setting">
+                <p className="pd-tone-label">말투</p>
+                <div className="pd-tone-options">
+                  {TONE_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      className={`pd-tone-option ${(data.tone || 'plain') === opt.value ? 'selected' : ''}`}
+                      onClick={() => setTone(opt.value)}
+                    >
+                      <span className="pd-tone-option-name">{opt.label}</span>
+                      <span className="pd-tone-option-desc">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
               <ul className="pd-privacy-text">
                 <li>AI API 키는 백엔드 서버에만 저장돼. 브라우저(프론트엔드)로는 절대 전달되지 않아.</li>
                 <li>대화·일기는 로그인한 계정별로 분리되어 저장돼. 다른 사람은 네 일기를 볼 수 없어.</li>
