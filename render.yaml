@@ -11,10 +11,16 @@ services:
     startCommand: cd backend && node server.js
     healthCheckPath: /api/health
     envVars:
-      # AI 답장/일기 생성에 쓰는 키와 제공자 선택('groq' | 'gemini').
+      # AI 답장/일기 생성에 쓰는 키와 제공자 선택('claude' | 'gemini' | 'groq').
       # 보안상 값은 여기에 적지 않고 Render 대시보드에서 직접 입력·수정함 (sync: false).
       # 쓰는 제공자의 키만 채우면 됨.
       - key: LLM_PROVIDER
+        sync: false
+      # 감정·공감 좋은 Claude를 쓰려면 LLM_PROVIDER=claude + 아래 키. (유료)
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # 편지 품질 우선 claude-sonnet-5-5 / 비용·속도 우선 claude-haiku-5-5 (선택)
+      - key: CLAUDE_MODEL
         sync: false
       - key: GROQ_API_KEY
         sync: false

@@ -48,6 +48,9 @@ const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 // 주 모델과 같은 값이면 폴백을 끔(무의미한 중복 호출 방지).
 const GEMINI_FALLBACK_MODEL = process.env.GEMINI_FALLBACK_MODEL || 'gemini-flash-lite-latest';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+// Claude(Anthropic) — 감정·공감이 담긴 자연스러운 한국어 글쓰기에 강함. 무료 티어는 없고 유료.
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5-5';
+const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 
 // 검수용 2차 LLM 호출(자연스러움/한국어 교정)을 건너뛰는 모드. API 호출 수와
 // 응답 시간이 절반으로 줄어서, 무료 등급 한도가 빠듯할 때 특히 중요함.
@@ -202,10 +205,13 @@ async function saveDataStore(userId, babyName, babyGender, entries) {
   writeFileDb();
 }
 
-if (LLM_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
+if (LLM_PROVIDER === 'claude' && !ANTHROPIC_API_KEY) {
+  console.warn('\n⚠️  LLM_PROVIDER=claude인데 ANTHROPIC_API_KEY가 설정되어 있지 않아요.');
+  console.warn('   backend/.env 에 ANTHROPIC_API_KEY를 채워넣어줘. (https://console.anthropic.com)\n');
+} else if (LLM_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
   console.warn('\n⚠️  LLM_PROVIDER=gemini인데 GEMINI_API_KEY가 설정되어 있지 않아요.');
   console.warn('   backend/.env 에 GEMINI_API_KEY를 채워넣어줘.\n');
-} else if (LLM_PROVIDER !== 'gemini' && !GROQ_API_KEY) {
+} else if (LLM_PROVIDER === 'groq' && !GROQ_API_KEY) {
   console.warn('\n⚠️  GROQ_API_KEY가 설정되어 있지 않아요.');
   console.warn('   backend/.env.example 을 backend/.env 로 복사하고 키를 채워넣어줘.\n');
 }
@@ -324,7 +330,7 @@ function naturalCheckSystemPrompt() {
 // 바로 실패로 돌려주지 않고 짧게 기다렸다가 두 번 더 시도함.
 // 429(한도 초과)는 재시도하지 않음 — 몇 초 기다려도 풀리지 않는 데다,
 // 재시도 요청 자체가 무료 한도를 더 깎아먹는 역효과만 있음.
-const RETRYABLE_STATUS = new Set([500, 502, 503]);
+const RETRYABLE_STATUS = new Set([500, 502, 503, 529]); // 529 = Anthropic 과부하(Overloaded)
 const RETRY_DELAYS_MS = [2000, 5000];
 
 async function fetchWithRetry(doFetch) {
@@ -369,7 +375,39 @@ async function callGroq(systemPrompt, messages, temperature) {
   return (data.choices?.[0]?.message?.content || '').trim();
 }
 
-// Gemini는 system 메시지가 따로 없이 system_instruction으로 받고, 대화 role도
+// Claude(Anthropic) Messages API 호출. system은 별도 필드로 보내고, 대화 메시지는
+// role이 user/assistant면 돼서 그대로 매핑함. 응답은 content 블록의 text들을 이어붙임.
+async function callClaude(systemPrompt, messages, temperature) {
+  if (!ANTHROPIC_API_KEY) {
+    throw new Error('서버에 ANTHROPIC_API_KEY가 설정되어 있지 않아요.');
+  }
+  const response = await fetchWithRetry(() => fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 1000,
+      system: systemPrompt,
+      ...(temperature !== undefined ? { temperature } : {}),
+      messages: (messages || []).map(m => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.content || ''
+      }))
+    })
+  }));
+  if (!response.ok) {
+    const errText = await response.text();
+    const err = new Error(`Claude API 오류 (${response.status}): ${errText}`);
+    err.status = response.status;
+    throw err;
+  }
+  const data = await response.json();
+  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+}
 // 'assistant'가 아니라 'model'이라 형식이 달라서 별도로 변환해서 호출함.
 function toGeminiContents(messages) {
   return (messages || []).map(m => ({
@@ -440,22 +478,33 @@ async function callGemini(systemPrompt, messages, temperature) {
   }
 }
 
-// LLM_PROVIDER 설정값에 따라 Groq/Gemini 중 실제로 호출할 제공자를 고름.
+// LLM_PROVIDER 설정값에 따라 Claude/Gemini/Groq 중 실제로 호출할 제공자를 고름.
 // 나머지 코드는 어떤 제공자를 쓰는지 몰라도 되게 이 함수 하나만 거쳐서 호출함.
-// 주 제공자가 재시도까지 하고도 실패했을 때(혼잡, 한도 소진 등), 다른 제공자의
-// 키가 설정되어 있으면 그쪽으로 한 번 더 시도해서 앱이 아예 멈추는 걸 막음.
+// 주 제공자가 재시도까지 하고도 실패했을 때(혼잡, 한도 소진 등), 키가 설정된
+// 다른 제공자로 순서대로 넘어가 앱이 아예 멈추는 걸 막음.
+const LLM_PROVIDERS = {
+  claude: { fn: (s, m, t) => callClaude(s, m, t), hasKey: () => !!ANTHROPIC_API_KEY },
+  gemini: { fn: (s, m, t) => callGemini(s, m, t), hasKey: () => !!GEMINI_API_KEY },
+  groq: { fn: (s, m, t) => callGroq(s, m, t), hasKey: () => !!GROQ_API_KEY }
+};
+
 async function callModel(systemPrompt, messages, temperature) {
-  const useGemini = LLM_PROVIDER === 'gemini';
-  const primary = useGemini ? callGemini : callGroq;
-  const fallback = useGemini ? callGroq : callGemini;
-  const fallbackKey = useGemini ? GROQ_API_KEY : GEMINI_API_KEY;
-  try {
-    return await primary(systemPrompt, messages, temperature);
-  } catch (e) {
-    if (!fallbackKey) throw e;
-    console.warn(`주 제공자(${LLM_PROVIDER}) 호출 실패, 예비 제공자로 재시도함: ${e.message}`);
-    return fallback(systemPrompt, messages, temperature);
+  const primaryName = LLM_PROVIDERS[LLM_PROVIDER] ? LLM_PROVIDER : 'groq';
+  // 주 제공자를 먼저, 그다음 키가 있는 나머지 제공자를 폴백 순서로 둠.
+  const order = [primaryName, ...Object.keys(LLM_PROVIDERS).filter(n => n !== primaryName)];
+  let lastErr;
+  for (let i = 0; i < order.length; i++) {
+    const name = order[i];
+    // 폴백(i>0)은 키가 설정된 제공자만 시도함.
+    if (i > 0 && !LLM_PROVIDERS[name].hasKey()) continue;
+    try {
+      return await LLM_PROVIDERS[name].fn(systemPrompt, messages, temperature);
+    } catch (e) {
+      lastErr = e;
+      if (i === 0) console.warn(`주 제공자(${name}) 호출 실패, 예비 제공자로 재시도함: ${e.message}`);
+    }
   }
+  throw lastErr;
 }
 
 // 모델이 확률적으로 답장/일기 초안 자체에 한자·일본어·러시아어 등 엉뚱한 문자나,
