@@ -24,7 +24,10 @@ function nextGender(g) {
 const TONE_OPTIONS = [
   { value: 'plain', label: '담백', desc: '담담하고 편안하게', example: '오늘 하늘이랑 공원 다녀왔구나. 날씨도 좋았겠다.' },
   { value: 'warm', label: '다정', desc: '포근하고 다정하게', example: '공원이라니 생각만 해도 포근하다. 하늘이도, 엄마도 참 좋은 하루였겠네.' },
-  { value: 'playful', label: '유쾌', desc: '장난기 있고 생기 있게', example: '오 공원 나들이! 하늘이 완전 신났겠는데? 오늘의 미니 소풍이었네 ㅎㅎ' }
+  { value: 'playful', label: '유쾌', desc: '장난기 있고 생기 있게', example: '오 공원 나들이! 하늘이 완전 신났겠는데? 오늘의 미니 소풍이었네 ㅎㅎ' },
+  { value: 'calm', label: '차분', desc: '잔잔하고 진중하게', example: '공원 다녀왔구나. 하늘이도 바깥 공기 쐬니 좋았겠다. 오늘 하루 수고했어.' },
+  { value: 'poetic', label: '감성', desc: '서정적이고 감성적으로', example: '가을 공원이라니. 바스락거리는 낙엽 사이로 하늘이 웃음소리가 들리는 것 같다.' },
+  { value: 'brief', label: '간결', desc: '짧고 간결하게', example: '공원 다녀왔구나. 좋았겠다.' }
 ];
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -88,32 +91,32 @@ async function fetchData() {
   return res.json();
 }
 
-async function saveData(babyName, babyGender, tone, entries) {
+async function saveData(babyName, babyGender, tone, customTone, entries) {
   const res = await fetch('/api/data', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, tone, entries })
+    body: JSON.stringify({ babyName, babyGender, tone, customTone, entries })
   });
   if (!res.ok) throw new Error('데이터를 저장하지 못했어요.');
   return res.json();
 }
 
-async function requestChatReply(babyName, babyGender, tone, messages) {
+async function requestChatReply(babyName, babyGender, tone, customTone, messages) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, tone, messages })
+    body: JSON.stringify({ babyName, babyGender, tone, customTone, messages })
   });
   if (!res.ok) throw new Error('답장을 받아오지 못했어요.');
   const data = await res.json();
   return data.reply;
 }
 
-async function requestDiary(babyName, babyGender, tone, content) {
+async function requestDiary(babyName, babyGender, tone, customTone, content) {
   const res = await fetch('/api/diary', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, tone, content })
+    body: JSON.stringify({ babyName, babyGender, tone, customTone, content })
   });
   if (!res.ok) throw new Error('일기를 완성하지 못했어요.');
   const data = await res.json();
@@ -169,13 +172,14 @@ export default function App() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [user, setUser] = useState(null);
   const [providers, setProviders] = useState({ google: false, kakao: false, email: true });
-  const [data, setData] = useState({ babyName: '', babyGender: '', tone: 'plain', entries: {} });
+  const [data, setData] = useState({ babyName: '', babyGender: '', tone: 'plain', customTone: '', entries: {} });
   const [view, setView] = useState('chat');
   const [nameInput, setNameInput] = useState('');
   const [editingName, setEditingName] = useState(false);
   // 온보딩(처음 시작) 단계: 'name'(이름 입력) → 'gender'(성별 선택)
   const [onboardStep, setOnboardStep] = useState('name');
   const [genderInput, setGenderInput] = useState('');
+  const [customInput, setCustomInput] = useState('');
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -201,7 +205,7 @@ export default function App() {
       if (me) {
         try {
           const parsed = await fetchData();
-          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', entries: parsed.entries || {} });
+          setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', customTone: parsed.customTone || '', entries: parsed.entries || {} });
         } catch (e) {
           console.error(e);
         }
@@ -216,7 +220,7 @@ export default function App() {
     setUser(u);
     try {
       const parsed = await fetchData();
-      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', entries: parsed.entries || {} });
+      setData({ babyName: parsed.babyName || '', babyGender: parsed.babyGender || '', tone: parsed.tone || 'plain', customTone: parsed.customTone || '', entries: parsed.entries || {} });
     } catch (e) {
       console.error(e);
     }
@@ -226,7 +230,7 @@ export default function App() {
   const handleLogout = useCallback(async () => {
     try { await logout(); } catch (e) { console.error(e); }
     setUser(null);
-    setData({ babyName: '', babyGender: '', tone: 'plain', entries: {} });
+    setData({ babyName: '', babyGender: '', tone: 'plain', customTone: '', entries: {} });
     setView('chat');
     setShowPrivacy(false);
     setOnboardStep('name');
@@ -237,11 +241,14 @@ export default function App() {
   const persist = useCallback(async (next) => {
     setData(next);
     try {
-      await saveData(next.babyName, next.babyGender, next.tone, next.entries);
+      await saveData(next.babyName, next.babyGender, next.tone, next.customTone, next.entries);
     } catch (e) {
       console.error('저장 실패', e);
     }
   }, []);
+
+  // 저장된 직접 입력 말투를 입력창에 반영(로그인/로드 시).
+  useEffect(() => { setCustomInput(data.customTone || ''); }, [data.customTone]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -294,9 +301,15 @@ export default function App() {
     persist({ ...data, babyGender: nextGender(data.babyGender) });
   };
 
-  // 말투(담백/다정/유쾌) 선택 — 설정 패널에서 바꿈.
+  // 말투 프리셋 선택 — 설정 패널에서 바꿈.
   const setTone = (tone) => {
     persist({ ...data, tone });
+  };
+
+  // 직접 입력한 말투를 저장(입력창에서 포커스가 빠질 때). 공백은 정리.
+  const commitCustomTone = () => {
+    const v = customInput.replace(/\s+/g, ' ').trim();
+    if (v !== (data.customTone || '')) persist({ ...data, customTone: v });
   };
 
   const handleRenameSubmit = () => {
@@ -331,7 +344,7 @@ export default function App() {
     setSending(true);
     try {
       const apiMessages = buildApiMessages(msgs);
-      const reply = await requestChatReply(data.babyName, data.babyGender, data.tone, apiMessages);
+      const reply = await requestChatReply(data.babyName, data.babyGender, data.tone, data.customTone, apiMessages);
       const withReply = [...msgs, { role: 'assistant', content: reply || '...' }];
       await persist({ ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: withReply } } });
     } catch (e) {
@@ -351,7 +364,7 @@ export default function App() {
         const who = m.role === 'user' ? '부모: ' : '친구: ';
         return who + (m.content || '');
       }).join('\n');
-      const diaryText = await requestDiary(data.babyName, data.babyGender, data.tone, transcript);
+      const diaryText = await requestDiary(data.babyName, data.babyGender, data.tone, data.customTone, transcript);
       const next = { ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, diaryText, createdAt: new Date().toISOString() } } };
       await persist(next);
     } catch (e) {
@@ -642,7 +655,7 @@ export default function App() {
                   {TONE_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
-                      className={`pd-tone-option ${(data.tone || 'plain') === opt.value ? 'selected' : ''}`}
+                      className={`pd-tone-option ${!data.customTone && (data.tone || 'plain') === opt.value ? 'selected' : ''}`}
                       onClick={() => setTone(opt.value)}
                     >
                       <span className="pd-tone-option-name">{opt.label}</span>
@@ -650,11 +663,30 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                <div className="pd-tone-example">
-                  <span className="pd-tone-example-label">예시</span>
-                  <p className="pd-tone-example-text">
-                    {(TONE_OPTIONS.find(o => o.value === (data.tone || 'plain')) || TONE_OPTIONS[0]).example}
-                  </p>
+                {data.customTone ? (
+                  <div className="pd-tone-example pd-tone-example-custom">
+                    <span className="pd-tone-example-label">직접 입력한 말투가 적용돼요</span>
+                    <p className="pd-tone-example-text">"{data.customTone}"</p>
+                  </div>
+                ) : (
+                  <div className="pd-tone-example">
+                    <span className="pd-tone-example-label">예시</span>
+                    <p className="pd-tone-example-text">
+                      {(TONE_OPTIONS.find(o => o.value === (data.tone || 'plain')) || TONE_OPTIONS[0]).example}
+                    </p>
+                  </div>
+                )}
+                <div className="pd-tone-custom">
+                  <input
+                    className="pd-input"
+                    value={customInput}
+                    onChange={e => setCustomInput(e.target.value)}
+                    onBlur={commitCustomTone}
+                    onKeyDown={e => { if (e.key === 'Enter' && !isImeComposing(e)) e.target.blur(); }}
+                    placeholder="원하는 말투를 직접 적어도 돼요"
+                    maxLength={200}
+                  />
+                  <p className="pd-tone-custom-hint">직접 적으면 위 선택보다 우선 적용돼요. 비우면 선택한 말투로 돌아가요.</p>
                 </div>
               </div>
               <ul className="pd-privacy-text">

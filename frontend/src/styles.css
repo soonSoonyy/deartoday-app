@@ -171,14 +171,18 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
 /* ---- 말투 선택 ---- */
 .pd-tone-setting { margin-bottom: 16px; }
 .pd-tone-label { font-size: 12px; font-weight: 700; color: var(--ink); margin: 0 0 8px; }
-.pd-tone-options { display: flex; gap: 6px; }
-.pd-tone-option { flex: 1; display: flex; flex-direction: column; gap: 3px; align-items: center; padding: 9px 4px; border-radius: 10px; background: #fff; border: 1.5px solid rgba(43,58,85,0.12); cursor: pointer; font-family: inherit; transition: border-color 0.15s, background 0.15s; }
+.pd-tone-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.pd-tone-option { flex: 1 1 28%; min-width: 72px; display: flex; flex-direction: column; gap: 3px; align-items: center; padding: 9px 4px; border-radius: 10px; background: #fff; border: 1.5px solid rgba(43,58,85,0.12); cursor: pointer; font-family: inherit; transition: border-color 0.15s, background 0.15s; }
 .pd-tone-option.selected { border-color: var(--rose); background: rgba(217,142,155,0.1); }
 .pd-tone-option-name { font-size: 12.5px; font-weight: 700; color: var(--ink); }
 .pd-tone-option-desc { font-size: 9.5px; color: var(--lavender); text-align: center; line-height: 1.3; }
 .pd-tone-example { margin-top: 10px; background: rgba(139,127,168,0.08); border-radius: 12px; padding: 10px 12px; }
 .pd-tone-example-label { font-size: 10px; font-weight: 700; color: var(--lavender); letter-spacing: 0.04em; }
 .pd-tone-example-text { font-size: 13px; color: var(--ink); line-height: 1.55; margin: 4px 0 0; }
+.pd-tone-example-custom { background: rgba(217,142,155,0.1); }
+.pd-tone-custom { margin-top: 10px; }
+.pd-tone-custom .pd-input { margin-bottom: 4px; }
+.pd-tone-custom-hint { font-size: 10.5px; color: var(--lavender); margin: 0; line-height: 1.4; }
 
 .pd-loading { color: #fff; }
 .pd-spin { animation: pd-rotate 1s linear infinite; }
