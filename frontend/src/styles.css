@@ -193,6 +193,25 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
 .pd-modal-close { position: absolute; top: -34px; right: 0; background: rgba(255,255,255,0.15); border: none; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; }
 
 .pd-privacy-panel { background: #fff; border-radius: 20px; padding: 24px 22px; }
+
+/* ---- 도움받기(위기 지원) ---- */
+.pd-help-setting { margin-top: 16px; padding-top: 16px; border-top: 1px solid rgba(43,58,85,0.08); }
+.pd-help-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0; }
+.pd-help-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; text-decoration: none; background: rgba(217,142,155,0.08); border: 1px solid rgba(217,142,155,0.25); border-radius: 12px; padding: 10px 12px; }
+.pd-help-item:active { background: rgba(217,142,155,0.16); }
+.pd-help-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pd-help-name { font-size: 13px; font-weight: 700; color: var(--ink); }
+.pd-help-note { font-size: 10.5px; color: var(--lavender); }
+.pd-help-call { display: flex; align-items: center; gap: 4px; font-size: 13px; font-weight: 700; color: var(--rose-dark); white-space: nowrap; flex-shrink: 0; }
+.pd-help-disclaimer { font-size: 10.5px; color: var(--lavender); line-height: 1.5; margin: 8px 0 0; }
+
+/* 위기 도움 모달 */
+.pd-help-panel { background: #fff; border-radius: 20px; padding: 24px 22px; text-align: center; }
+.pd-help-icon { width: 46px; height: 46px; border-radius: 50%; background: rgba(217,142,155,0.15); color: var(--rose-dark); display: flex; align-items: center; justify-content: center; margin: 0 auto 10px; }
+.pd-help-title { font-size: 18px; font-weight: 700; color: var(--ink); margin: 0 0 6px; }
+.pd-help-lead { font-size: 13px; color: var(--ink); line-height: 1.6; margin: 0 0 14px; }
+.pd-help-panel .pd-help-list { text-align: left; }
+.pd-help-panel .pd-help-disclaimer { text-align: left; }
 .pd-privacy-icon { color: var(--sage); margin-bottom: 8px; }
 .pd-privacy-title { font-size: 18px; font-weight: 700; margin: 0 0 12px; }
 .pd-privacy-text { margin: 0 0 18px; padding-left: 18px; font-size: 12px; line-height: 1.7; color: var(--ink); display: flex; flex-direction: column; gap: 8px; }

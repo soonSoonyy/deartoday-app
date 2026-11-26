@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Heart, Calendar as CalendarIcon, MessageCircle, Send,
   ChevronLeft, ChevronRight, X, Moon, Loader2, Pencil, Sparkles,
-  Settings, Trash2
+  Settings, Trash2, Phone, LifeBuoy
 } from 'lucide-react';
 
 const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -36,6 +36,16 @@ const LENGTH_OPTIONS = [
   { value: 'medium', label: '보통', desc: '400자 내외' },
   { value: 'long', label: '길게', desc: '700자 내외' }
 ];
+
+// 위기·도움 지원 연락처 (탭하면 전화 연결). 한국 공식 창구.
+const HELP_RESOURCES = [
+  { label: '자살예방 상담전화', number: '109', note: '24시간·무료' },
+  { label: '정신건강위기 상담', number: '1577-0199', note: '24시간' },
+  { label: '여성긴급전화', number: '1366', note: '위기·폭력 24시간' },
+  { label: '보건복지상담', number: '129', note: '' }
+];
+const HELP_DISCLAIMER = '이 앱은 의료·전문 상담 서비스가 아니에요. 많이 힘들거나 위급한 상황이면 위 번호나 119로 바로 연락해 주세요.';
+
 
 function pad(n) { return String(n).padStart(2, '0'); }
 function formatKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
@@ -116,7 +126,7 @@ async function requestChatReply(babyName, babyGender, tone, customTone, messages
   });
   if (!res.ok) throw new Error('답장을 받아오지 못했어요.');
   const data = await res.json();
-  return data.reply;
+  return { reply: data.reply, crisis: !!data.crisis };
 }
 
 async function requestDiary(babyName, babyGender, tone, customTone, letterLength, content) {
@@ -195,6 +205,7 @@ export default function App() {
   const [calMonth, setCalMonth] = useState(new Date().getMonth());
   const [selectedEntryKey, setSelectedEntryKey] = useState(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmReset, setConfirmReset] = useState(false);
   const scrollRef = useRef(null);
@@ -356,9 +367,11 @@ export default function App() {
     setSending(true);
     try {
       const apiMessages = buildApiMessages(msgs);
-      const reply = await requestChatReply(data.babyName, data.babyGender, data.tone, data.customTone, apiMessages);
+      const { reply, crisis } = await requestChatReply(data.babyName, data.babyGender, data.tone, data.customTone, apiMessages);
       const withReply = [...msgs, { role: 'assistant', content: reply || '...' }];
       await persist({ ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: withReply } } });
+      // 위험 신호가 감지되면 상담 연락처 모달을 눈에 띄게 띄움.
+      if (crisis) setShowHelp(true);
     } catch (e) {
       setError('지금은 답장을 받아올 수 없어. 잠시 후 다시 시도해줘.');
     } finally {
@@ -734,11 +747,54 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              <div className="pd-help-setting">
+                <p className="pd-tone-label">도움받기</p>
+                <HelpList />
+                <p className="pd-help-disclaimer">{HELP_DISCLAIMER}</p>
+              </div>
             </div>
           </div>
         </div>
       )}
 
+      {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+
+    </div>
+  );
+}
+
+// 도움 연락처 목록 (탭하면 전화 연결). 위기 모달과 설정에서 공용으로 씀.
+function HelpList() {
+  return (
+    <div className="pd-help-list">
+      {HELP_RESOURCES.map(r => (
+        <a key={r.number} className="pd-help-item" href={`tel:${r.number.replace(/-/g, '')}`}>
+          <span className="pd-help-info">
+            <span className="pd-help-name">{r.label}</span>
+            {r.note && <span className="pd-help-note">{r.note}</span>}
+          </span>
+          <span className="pd-help-call"><Phone size={13} /> {r.number}</span>
+        </a>
+      ))}
+    </div>
+  );
+}
+
+// 위기 감지 시 뜨는 도움 안내 모달.
+function HelpModal({ onClose }) {
+  return (
+    <div className="pd-modal-backdrop" onClick={onClose}>
+      <div className="pd-modal" onClick={e => e.stopPropagation()}>
+        <button className="pd-modal-close" onClick={onClose}><X size={16} /></button>
+        <div className="pd-help-panel">
+          <div className="pd-help-icon"><LifeBuoy size={22} /></div>
+          <h2 className="pd-help-title">혼자가 아니에요</h2>
+          <p className="pd-help-lead">많이 힘드셨죠. 지금 바로 이야기 나눌 수 있는 곳이 있어요. 아래를 누르면 전화가 연결돼요.</p>
+          <HelpList />
+          <p className="pd-help-disclaimer">{HELP_DISCLAIMER}</p>
+        </div>
+      </div>
     </div>
   );
 }

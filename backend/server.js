@@ -923,7 +923,7 @@ app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
     // 안전망: 가장 최근 사용자 발화에 위험 신호가 있으면 AI 대신 상담 안내를 바로 응답.
     const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
     if (lastUser && CRISIS_PATTERNS.test(lastUser.content || '')) {
-      return res.json({ reply: CRISIS_REPLY });
+      return res.json({ reply: CRISIS_REPLY, crisis: true });
     }
     const draft = await callModelKorean(chatSystemPrompt(babyName, babyGender, tone, customTone), messages, { babyName });
     const reply = await naturalizeReply(draft, messages, babyName);
