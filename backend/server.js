@@ -349,7 +349,7 @@ function toneInstruction(tone, customTone, kind) {
   return (TONE_GUIDE[tone] || TONE_GUIDE.plain)[kind];
 }
 
-function chatSystemPrompt(babyName, babyGender, tone, customTone) {
+function chatSystemPrompt(babyName, babyGender, tone, customTone, recentDiaries) {
   const name = babyName || '아기';
   return `너는 사용자의 절친한 친구야. 사용자는 ${name}를 키우는 부모이고, 아기를 재운 뒤 밤에 하루를 돌아보며 너랑 카톡하듯 편하게 대화하는 중이야.${genderNote(name, babyGender)}
 - [최우선·안전] 부모가 "죽고 싶다", "죽어", "자살", "사라지고 싶다", "다 포기하고 싶다"처럼 자해·자살을 암시하거나 극단적으로 비관적인 말을 하면, 절대 그 말에 맞장구치거나 동조하지 말고 장난·농담도 하지 마. 이 규칙은 아래 말투 설정보다 항상 우선이야. 대신 진심으로 걱정하며, 혼자 견디지 말고 도움을 받자고 다정하면서도 진지하게 권하고, "자살예방 상담전화 109"(24시간, 무료)에 지금 연락해볼 수 있다고 꼭 알려줘. 가볍게 넘기거나 "그랬구나" 하고 다음 얘기로 넘어가지 마.
@@ -365,7 +365,23 @@ ${toneInstruction(tone, customTone, 'chat')}
 - 꼬치꼬치 캐묻거나 세세하게 파고드는 질문은 하지 마. 진짜 친구가 편하게 수다 떨듯이 자연스럽게 말해
 - 이미 하루가 끝난 시점이니 "지금 뭐 해?", "지금은 좀 어때?"처럼 현재 상태를 묻지 말고, 오늘 있었던 일을 돌아보는 질문을 해
 - 재우기 얘기까지 나왔으면 하루를 마친 부모의 기분을 물어보며 대화를 부드럽게 마무리해도 좋아
-- 부모가 주어를 생략하고 말하면(예: "오늘 신나게 놀았어"), 문맥상 명백히 부모 얘기가 아닌 이상 그 문장의 주어를 ${name}로 우선 이해하고 반응해`;
+- 부모가 주어를 생략하고 말하면(예: "오늘 신나게 놀았어"), 문맥상 명백히 부모 얘기가 아닌 이상 그 문장의 주어를 ${name}로 우선 이해하고 반응해${recentDiariesNote(recentDiaries)}`;
+}
+
+// 최근 며칠 편지(일기)를 대화 맥락에 넣어, 친구가 지난 얘기를 자연스럽게 떠올리게 함.
+function recentDiariesNote(recentDiaries) {
+  if (!Array.isArray(recentDiaries) || recentDiaries.length === 0) return '';
+  const lines = recentDiaries
+    .filter(d => d && d.text)
+    .slice(0, 5)
+    .map(d => `  · (${String(d.date || '').slice(0, 20)}) ${String(d.text).replace(/\s+/g, ' ').trim().slice(0, 300)}`)
+    .join('\n');
+  if (!lines) return '';
+  return `
+
+[참고: 최근 며칠 엄마가 쓴 편지들]
+${lines}
+위 내용 중 지금 대화와 자연스럽게 이어지는 게 있으면 "요즘 ~ 때문에 그랬잖아, 좀 어때?"처럼 가볍게 떠올려도 좋아. 단, 억지로 꺼내지 말고 흐름에 맞을 때만. 매번 들추지는 마.`;
 }
 
 // 편지 길이 설정에 따른 분량 안내.
@@ -917,7 +933,7 @@ const CRISIS_REPLY = '잠깐, 방금 네 말이 너무 걱정돼서 그냥 못 �
 // ---- 채팅 답장 ----
 app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
-    const { babyName, babyGender, tone, customTone, messages } = req.body || {};
+    const { babyName, babyGender, tone, customTone, recentDiaries, messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages가 비어있어요.' });
     }
@@ -926,7 +942,7 @@ app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
     if (lastUser && CRISIS_PATTERNS.test(lastUser.content || '')) {
       return res.json({ reply: CRISIS_REPLY, crisis: true });
     }
-    const draft = await callModelKorean(chatSystemPrompt(babyName, babyGender, tone, customTone), messages, { babyName });
+    const draft = await callModelKorean(chatSystemPrompt(babyName, babyGender, tone, customTone, recentDiaries), messages, { babyName });
     const reply = await naturalizeReply(draft, messages, babyName);
     res.json({ reply });
   } catch (e) {

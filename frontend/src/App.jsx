@@ -101,6 +101,19 @@ function buildApiMessages(msgs) {
   return merged;
 }
 
+// 최근 며칠 편지(일기)를 모아 대화 맥락으로 보냄(오늘 제외, 최신순 최대 5개).
+// 친구가 지난 얘기를 자연스럽게 떠올리게 하는 '가벼운 기억' 용도.
+function buildRecentDiaries(entries, todayKey) {
+  return Object.keys(entries || {})
+    .filter(k => k !== todayKey && entries[k] && entries[k].diaryText)
+    .sort((a, b) => (a < b ? 1 : -1))
+    .slice(0, 5)
+    .map(k => {
+      const d = parseKey(k);
+      return { date: `${d.getMonth() + 1}월 ${d.getDate()}일`, text: String(entries[k].diaryText).slice(0, 400) };
+    });
+}
+
 // ---- Backend calls (the Groq API key lives only on the server) ----
 async function fetchData() {
   const res = await fetch('/api/data');
@@ -118,11 +131,11 @@ async function saveData(babyName, babyGender, tone, customTone, letterLength, en
   return res.json();
 }
 
-async function requestChatReply(babyName, babyGender, tone, customTone, messages) {
+async function requestChatReply(babyName, babyGender, tone, customTone, recentDiaries, messages) {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ babyName, babyGender, tone, customTone, messages })
+    body: JSON.stringify({ babyName, babyGender, tone, customTone, recentDiaries, messages })
   });
   if (!res.ok) throw new Error('답장을 받아오지 못했어요.');
   const data = await res.json();
@@ -367,7 +380,8 @@ export default function App() {
     setSending(true);
     try {
       const apiMessages = buildApiMessages(msgs);
-      const { reply, crisis } = await requestChatReply(data.babyName, data.babyGender, data.tone, data.customTone, apiMessages);
+      const recentDiaries = buildRecentDiaries(data.entries, todayKey);
+      const { reply, crisis } = await requestChatReply(data.babyName, data.babyGender, data.tone, data.customTone, recentDiaries, apiMessages);
       const withReply = [...msgs, { role: 'assistant', content: reply || '...' }];
       await persist({ ...data, entries: { ...data.entries, [todayKey]: { ...todayEntry, messages: withReply } } });
       // 위험 신호가 감지되면 상담 연락처 모달을 눈에 띄게 띄움.
