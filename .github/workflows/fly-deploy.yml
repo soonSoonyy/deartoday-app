@@ -1,0 +1,22 @@
+name: Fly Deploy
+
+# 이 브랜치에 push가 있을 때마다 Fly.io로 자동 배포함.
+# (claude가 코드를 push하면 → GitHub Actions가 flyctl deploy를 대신 실행)
+on:
+  push:
+    branches:
+      - claude/mobile-deployment-branch-9um96v
+  workflow_dispatch: {}   # GitHub 웹에서 수동 실행도 가능
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    concurrency: deploy-group   # 동시에 두 번 배포되지 않게
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # --remote-only: Docker 빌드를 Fly 서버가 대신 해줌(러너에 Docker 불필요)
+      - run: flyctl deploy --remote-only --app deartoday
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
