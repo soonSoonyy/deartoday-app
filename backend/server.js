@@ -60,6 +60,10 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 // 문자 오염을 걸러내는 결정적 필터(stripNonKorean 등)는 모드와 무관하게 항상 동작함.
 const FAST_MODE = !/^(0|false|no)$/i.test(process.env.FAST_MODE || '');
 
+// 모델 출력 토큰 상한. 한국어 700자(길게 편지)는 1100~1700토큰이라 1000이면 잘림.
+// 넉넉히 2048로 둬서 긴 편지도 안 잘리게 함(짧은 답장은 알아서 짧게 끝남).
+const MAX_OUTPUT_TOKENS = 2048;
+
 const EMPTY_DATA = { babyName: '', babyGender: '', tone: 'plain', customTone: '', letterLength: 'medium', entries: {} };
 
 // ---- 저장소 계층: 사용자(users) + 사용자별 일기(diaries) ----
@@ -456,7 +460,7 @@ async function callGroq(systemPrompt, messages, temperature) {
     },
     body: JSON.stringify({
       model: GROQ_MODEL,
-      max_tokens: 1000,
+      max_tokens: MAX_OUTPUT_TOKENS,
       ...(temperature !== undefined ? { temperature } : {}),
       messages: toGroqMessages(systemPrompt, messages)
     })
@@ -484,7 +488,7 @@ async function callClaude(systemPrompt, messages, temperature) {
     },
     body: JSON.stringify({
       model: CLAUDE_MODEL,
-      max_tokens: 1000,
+      max_tokens: MAX_OUTPUT_TOKENS,
       system: systemPrompt,
       ...(temperature !== undefined ? { temperature } : {}),
       messages: (messages || []).map(m => ({
@@ -528,6 +532,7 @@ async function callGeminiModel(model, systemPrompt, messages, temperature) {
   }
   while (true) {
     const generationConfig = {
+      maxOutputTokens: MAX_OUTPUT_TOKENS,
       ...(temperature !== undefined ? { temperature } : {}),
       ...GEMINI_THINKING_CONFIGS[geminiThinkingIndex]
     };
@@ -902,12 +907,23 @@ app.post('/api/data', requireAuth, async (req, res) => {
   }
 });
 
+// ---- 코드 레벨 안전망: 자해·자살 위험 신호 감지 ----
+// 흔한 과장 표현("배고파 죽겠어", "힘들어 죽겠어")은 피하고, 실제 위험 신호만 높은
+// 정확도로 잡음. 걸리면 AI를 거치지 않고 고정된 상담 안내 답장을 바로 돌려줌(100% 보장).
+const CRISIS_PATTERNS = /자살|자해|죽고\s*싶|죽어\s*버리(고|겠)|죽어야겠|사라지고\s*싶|없어지고\s*싶|목숨.{0,4}끊|뛰어내리|극단적\s*선택/;
+const CRISIS_REPLY = '잠깐, 방금 네 말이 너무 걱정돼서 그냥 못 넘어가겠어. 그런 생각이 들 만큼 많이 지치고 힘들었구나. 근데 그 마음, 혼자 안고 있지 않았으면 좋겠어. 지금 바로 얘기 나눌 수 있는 곳이 있어 — 자살예방 상담전화 109번, 24시간 열려 있고 무료야. 전화 한 통이면 돼. 너는 혼자가 아니야. 나도 여기 있을게.';
+
 // ---- 채팅 답장 ----
 app.post('/api/chat', requireAuth, aiLimiter, async (req, res) => {
   try {
     const { babyName, babyGender, tone, customTone, messages } = req.body || {};
     if (!Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'messages가 비어있어요.' });
+    }
+    // 안전망: 가장 최근 사용자 발화에 위험 신호가 있으면 AI 대신 상담 안내를 바로 응답.
+    const lastUser = [...messages].reverse().find(m => m && m.role === 'user');
+    if (lastUser && CRISIS_PATTERNS.test(lastUser.content || '')) {
+      return res.json({ reply: CRISIS_REPLY });
     }
     const draft = await callModelKorean(chatSystemPrompt(babyName, babyGender, tone, customTone), messages, { babyName });
     const reply = await naturalizeReply(draft, messages, babyName);
